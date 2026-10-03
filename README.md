@@ -169,7 +169,12 @@ npm run preview
 
 Netlify: статика из `dist`, функции из `netlify/functions`, данные в Netlify
 Blobs. Конфиг в `netlify.toml` (Node 20, SPA-редирект на `index.html`). Проект
-на Netlify уже создан: **biliardconf** → https://biliardconf.netlify.app
+на Netlify уже создан: **mabtraining** → https://mabtraining.netlify.app
+
+Это отдельный проект, отделённый от `biliardconf` на сборке `da86479` (стол и
+шары для пула). У него свой сайт и своё хранилище Netlify Blobs: библиотеки
+двух сайтов никак не связаны, и эта начиналась пустой. Дальше проекты
+развиваются независимо; исправление из одного в другой переносится руками.
 
 Правила для `/api` в `netlify.toml` нет намеренно: функции объявляют свои пути
 сами (`export const config = { path: '/api/...' }`), и такой путь разбирается
@@ -185,7 +190,7 @@ Blobs. Конфиг в `netlify.toml` (Node 20, SPA-редирект на `index
 2. Разово, из корня репозитория:
 
    ```bash
-   npx netlify-cli deploy --prod --dir=dist --site=biliardconf
+   npx netlify-cli deploy --prod --dir=dist --site=mabtraining
    ```
 
 Vite 8 требует Node не ниже 20.19 — это записано в `engines` в `package.json`,
