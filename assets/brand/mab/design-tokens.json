@@ -1,0 +1,32 @@
+{
+  "colors": {
+    "blue": "#72D0F7",
+    "white": "#FFFFFF",
+    "tile": "#16191D",
+    "navy": "#173447",
+    "cream": "#E8E2D0"
+  },
+  "logo": {
+    "source": "source/mab-logo.png",
+    "sourcePx": [1280, 733],
+    "balls": { "radius": 35.3, "pitch": 92.05, "rowStep": 82.25, "apex": [288.1, 257.9], "whiteBall": "bottom right" },
+    "bar": [[487, 224, 18, 80], [487, 375, 18, 82]],
+    "minimumSignWidthPx": 32
+  },
+  "watermark": {
+    "viewBox": [0, 0, 1200, 660],
+    "cloth": [40, 40, 1120, 560],
+    "columns": 4,
+    "xFormula": "64 + column * 272 + (row % 2 ? 24 : 0)",
+    "stampSize": [206, 42],
+    "markHeightInStamp": 0.9
+  },
+  "indicator": {
+    "width": 140,
+    "height": 88
+  },
+  "font": {
+    "family": "Manrope",
+    "license": "SIL OFL 1.1"
+  }
+}
