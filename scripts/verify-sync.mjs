@@ -417,8 +417,10 @@ async function snapshots() {
   await a.page.waitForSelector('.snap__head', { timeout: 20000 })
   a.page.once('dialog', (dlg) => dlg.accept())
   await L.getByRole('button', { name: 'Восстановить всё' }).click()
+  // any note, not the first: when the boot's first exchange happens to carry
+  // this exercise up, «Перенесено на сервер» stands above it, and rightly so
   await a.page.waitForFunction(
-    () => document.querySelector('.library__note')?.textContent?.includes('Восстановлено'),
+    () => [...document.querySelectorAll('.library__note')].some((n) => n.textContent?.includes('Восстановлено')),
     null,
     { timeout: 20000 },
   )
