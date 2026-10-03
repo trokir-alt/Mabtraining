@@ -11,7 +11,7 @@
 
 export type Vec = { x: number; y: number }
 
-export type ClothColor = 'blue' | 'green'
+export type ClothColor = 'blue' | 'green' | 'red' | 'grey'
 
 /**
  * Which game the table is for. It decides the table itself - size, pockets,
@@ -182,6 +182,25 @@ export type GhostBallItem = ItemBase & {
   y: number
 }
 
+/**
+ * The distance between two balls, counted in balls: a row of ghosts laid
+ * touching from the first ball towards the second, and the count beside it.
+ *
+ * It holds the two balls by id, not their positions, so it follows them as
+ * the coach moves either one - the point is that the row is always true. With
+ * either ball gone it draws nothing and is pruned with the edit that removed it.
+ */
+export type MeasureItem = ItemBase & {
+  type: 'measure'
+  /** the ball the row starts from */
+  a: string
+  /** the ball it runs to */
+  b: string
+  color: string
+  /** the count beside the row: "3,4 шара" */
+  label: boolean
+}
+
 /* ------------------------------------------------------------------ union */
 
 export type Item =
@@ -194,6 +213,7 @@ export type Item =
   | StrikePointItem
   | PowerItem
   | GhostBallItem
+  | MeasureItem
 
 export type ItemType = Item['type']
 

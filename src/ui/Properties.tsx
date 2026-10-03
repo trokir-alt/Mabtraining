@@ -14,6 +14,7 @@ import { INK, STROKE_WIDTHS, TEXT_SIZES } from '../model/style'
 import { gameOf, scaledPreset } from '../model/game'
 import { PoolBallPicker } from './GameControls'
 import { formatPower } from '../model/item'
+import { formatBalls, formatGap, measureEnds, measureLayout } from '../model/measure'
 import { useIsMobile } from './useMedia'
 
 export function Properties() {
@@ -21,6 +22,7 @@ export function Properties() {
   const item = useStore((s) => s.scene.items.find((i) => i.id === s.selectedId))
   const ballMm = useStore((s) => s.scene.table.ballMm)
   const table = useStore((s) => s.scene.table)
+  const items = useStore((s) => s.scene.items)
   const tool = useStore((s) => s.tool)
   const view = useView()
   const mobile = useIsMobile()
@@ -41,7 +43,7 @@ export function Properties() {
 
   const pos = useMemo(() => {
     if (!item || !view.layout) return null
-    const b = itemBounds(item, ballMm)
+    const b = itemBounds(item, ballMm, items)
     // anchor under the object's bounding box, in css px inside .stage-wrap
     const corners = [
       mmToCss(view, { x: b.x, y: b.y }),
@@ -70,7 +72,7 @@ export function Properties() {
       top: Math.max(...ys) + 12,
       low: (Math.min(...ys) + Math.max(...ys)) / 2 > mid,
     }
-  }, [item, ballMm, view, panelW])
+  }, [item, ballMm, items, view, panelW])
 
   if (!item || !selectedId || tool !== 'select') return null
   const st = useStore.getState()
@@ -88,6 +90,9 @@ export function Properties() {
   const hasBall = t === 'ball'
   const hasStrike = t === 'strikePoint'
   const hasPower = t === 'power'
+  const hasMeasure = t === 'measure'
+  const ends = hasMeasure ? measureEnds(item, items) : null
+  const ruler = ends ? measureLayout(ends[0], ends[1], ballMm) : null
 
   const color = 'color' in item ? item.color : null
   const pool = gameOf(table) === 'pool'
@@ -326,7 +331,30 @@ export function Properties() {
         </div>
       )}
 
-      {mobile && (
+      {hasMeasure && ruler && (
+        <div className="props__row">
+          <span className="props__label" aria-live="polite" data-testid="measure-readout">
+            {formatBalls(ruler.balls)} · {formatGap(ruler.gap, ballMm)}
+          </span>
+        </div>
+      )}
+
+      {hasMeasure && (
+        <div className="props__row">
+          <label className="switch switch--inline">
+            <span className="switch__label">Подпись</span>
+            <input type="checkbox" className="switch__input" checked={item.label} onChange={() => st.updateItem(item.id, { label: !item.label })} />
+            <span className="switch__track">
+              <span className="switch__knob" />
+            </span>
+          </label>
+          <button type="button" className="btn" onClick={() => st.updateItem(item.id, { a: item.b, b: item.a })} title="Призраки встанут от другого шара">
+            От другого шара
+          </button>
+        </div>
+      )}
+
+      {mobile && !hasMeasure && (
         <div className="props__row props__row--nudge" aria-label="Сдвиг на 5 мм">
           <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(-5, 0)} aria-label="Влево 5 мм">←</button>
           <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(0, -5)} aria-label="Вверх 5 мм">↑</button>
@@ -343,9 +371,11 @@ export function Properties() {
         <button type="button" className="btn btn--icon" onClick={() => st.sendToBack(item.id)} title="На задний план" aria-label="На задний план">
           ⬇
         </button>
-        <button type="button" className="btn" onClick={() => st.duplicateSelected()} title="Ctrl+D">
-          Дублировать
-        </button>
+        {!hasMeasure && (
+          <button type="button" className="btn" onClick={() => st.duplicateSelected()} title="Ctrl+D">
+            Дублировать
+          </button>
+        )}
         <button type="button" className="btn btn--danger" onClick={() => st.removeSelected()} title="Delete">
           Удалить
         </button>

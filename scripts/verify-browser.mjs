@@ -1680,8 +1680,207 @@ async function pool(page, label) {
   await page.waitForTimeout(200)
 }
 
+/**
+ * Red and grey cloth, and the ball ruler.
+ *
+ * `phone` carries what a touch screen does differently: the cloth swatches
+ * live in the menu sheet, and the ruler is drawn with a finger.
+ */
+async function clothAndRuler(page, label, phone = null) {
+  await page.evaluate(() => window.__store.getState().newExercise())
+  // ---- cloth: four swatches, each one a real colour on the canvas
+  const pickCloth = async (name) => {
+    if (phone) await page.getByRole('button', { name: 'Меню', exact: true }).click()
+    await page.getByRole('button', { name, exact: true }).click()
+    if (phone && (await page.locator('.sheet').count())) await page.locator('.sheet').getByRole('button', { name: 'Закрыть' }).last().click()
+    await page.waitForTimeout(250)
+  }
+  /** the median colour of bare cloth, sampled on a grid away from the middle line */
+  const clothColour = () =>
+    measure(page, `
+      const L = scene.table.lengthMm, W = scene.table.widthMm
+      const px = []
+      for (let i = 1; i < 8; i++) for (let j = 1; j < 4; j++) {
+        const c = at(L * i / 8 + 37, W * j / 4 + 41)
+        if (c) px.push(c)
+      }
+      const med = (k) => px.map((c) => c[k]).sort((a, b) => a - b)[Math.floor(px.length / 2)]
+      return [med(0), med(1), med(2)]
+    `)
+  const before = await clothColour()
+  for (const [name, id, test, what] of [
+    ['Красное сукно', 'red', (c) => c[0] > c[1] + 50 && c[0] > c[2] + 40, 'red well above green and blue'],
+    ['Серое сукно', 'grey', (c) => Math.max(...c) - Math.min(...c) < 40 && c[0] > 60, 'r, g, b within 40 and not black'],
+  ]) {
+    await pickCloth(name)
+    const sc = await scene(page)
+    const c = await clothColour()
+    check(`${label}: «${name}» sets the cloth to ${id}`, sc.table.cloth === id, sc.table.cloth)
+    check(`${label}: ${id} cloth is drawn ${id} on the canvas`, test(c), `rgb ${c.join(',')}: ${what}`)
+    // on the phone the swatches went away with the sheet
+    if (!phone) {
+      const pressed = await page.getByRole('button', { name, exact: true }).first().getAttribute('aria-pressed')
+      check(`${label}: the ${id} swatch shows as chosen`, pressed === 'true', String(pressed))
+    }
+  }
+  await page.evaluate(() => window.__store.getState().undo())
+  await page.waitForTimeout(150)
+  check(`${label}: undo takes grey cloth back to red`, (await scene(page)).table.cloth === 'red')
+  await page.evaluate(() => window.__store.getState().undo())
+  await page.waitForTimeout(150)
+  const back = await clothColour()
+  check(`${label}: and red back to the blue it started on`, (await scene(page)).table.cloth === 'blue' && Math.abs(back[2] - before[2]) < 6, `rgb ${back.join(',')} vs ${before.join(',')}`)
+
+  // ---- the ruler: drawn from ball to ball
+  const ids = await page.evaluate(() => {
+    const st = window.__store.getState()
+    const D = st.scene.table.ballMm
+    st.addBall('white', { x: 900, y: 887.5 })
+    st.addBall('cue', { x: 900 + D * 4.4, y: 887.5 })
+    st.addBall('white', { x: 2400, y: 500 })
+    return window.__store.getState().scene.items.filter((i) => i.type === 'ball').map((b) => b.id)
+  })
+  const D = (await scene(page)).table.ballMm
+  const ball = async (id) => (await scene(page)).items.find((i) => i.id === id)
+  const draw = async (from, to) => {
+    const [[x0, y0], [x1, y1]] = await toPageAll(page, [[from.x, from.y], [to.x, to.y]])
+    if (phone) await phone.swipe([x0, y0], [x1, y1])
+    else {
+      await page.mouse.move(x0, y0)
+      await page.mouse.down()
+      await page.mouse.move(x1, y1, { steps: 14 })
+      await page.mouse.move(x1, y1)
+      await page.mouse.up()
+      await page.waitForTimeout(200)
+    }
+  }
+  const measures = async () => (await scene(page)).items.filter((i) => i.type === 'measure')
+  const drawn = () =>
+    page.evaluate(() => {
+      const st = window.__stage
+      const ghosts = st.find('.measure-ghost').map((n) => ({ x: n.x(), y: n.y() }))
+      const labels = st.find('.measure-label').map((n) => ({ text: n.text(), rotation: n.rotation() }))
+      return { ghosts, labels }
+    })
+
+  if (phone) {
+    const b = page.locator('.m-dock').getByRole('button', { name: 'Расстояние в шарах', exact: true })
+    await b.scrollIntoViewIfNeeded()
+    await b.click()
+  } else await tool(page, 'Расстояние в шарах')
+  check(`${label}: the ruler tool is on the panel`, (await page.evaluate(() => window.__store.getState().tool)) === 'measure')
+
+  const [A, B, C] = [await ball(ids[0]), await ball(ids[1]), await ball(ids[2])]
+  // a press on open cloth is not a ruler, nor is a release on open cloth
+  await draw({ x: 1500, y: 1300 }, B)
+  await draw(A, { x: 1500, y: 1300 })
+  check(`${label}: a ruler needs a ball at both ends`, (await measures()).length === 0, `${(await measures()).length} made`)
+
+  await draw(A, B)
+  let ms = await measures()
+  check(`${label}: ball to ball makes one ruler`, ms.length === 1 && ms[0].a === A.id && ms[0].b === B.id, JSON.stringify(ms))
+  let pic = await drawn()
+  const gap = Math.hypot(B.x - A.x, B.y - A.y) - D
+  check(`${label}: three ghosts fit in a gap of 3.4 balls`, pic.ghosts.length === 3, `${pic.ghosts.length} ghosts, gap ${(gap / D).toFixed(2)} balls`)
+  const steps = pic.ghosts.map((g, i) => Math.hypot(g.x - (i ? pic.ghosts[i - 1] : A).x, g.y - (i ? pic.ghosts[i - 1] : A).y))
+  check(`${label}: each ghost touches the one before it, starting at the first ball`, steps.every((s) => Math.abs(s - D) < 0.01), steps.map((s) => s.toFixed(2)).join(' / '))
+  check(`${label}: the ruler is labelled «3,4 шара»`, pic.labels.length === 1 && pic.labels[0].text === '3,4 шара', JSON.stringify(pic.labels))
+  const ring = await measure(page, `
+    const g = ${JSON.stringify(pic.ghosts[1])}, r = ${D / 2}
+    // the ring at the top of the middle ghost, against the cloth well clear of
+    // it; sampled across the band, since its outer pixel is antialiased and on
+    // a phone that pixel is a millimetre and a half of table
+    const ringC = [1, 2, 3].flatMap((dy) => [-0.6, 0, 0.6].map((dx) => at(g.x + dx, g.y - r + dy))).filter(Boolean)
+    const ringL = Math.max(...ringC.map(luma))
+    return { ring: ringL, cloth: luma(at(g.x, g.y - r * 3.2)) }
+  `)
+  check(`${label}: the ghost's ring stands out on the cloth`, ring.ring - ring.cloth > 60, `ring ${ring.ring.toFixed(0)} vs cloth ${ring.cloth.toFixed(0)}`)
+
+  await draw(B, A)
+  check(`${label}: the same pair again does not stack a second ruler`, (await measures()).length === 1)
+  await draw(B, C)
+  check(`${label}: a second ruler from the same ball`, (await measures()).length === 2)
+
+  // ---- it follows its ball, and the magnet sets a whole count
+  if (phone) {
+    const b = page.locator('.m-dock').getByRole('button', { name: 'Выбор', exact: true })
+    await b.scrollIntoViewIfNeeded()
+    await b.click()
+  } else await tool(page, 'Выбор')
+  // the last ruler drawn is selected, and its panel may sit over the ball
+  await page.evaluate(() => window.__store.getState().select(null))
+  await page.waitForTimeout(150)
+  const target = { x: A.x + D * (1 + 5.04), y: A.y }
+  if (phone) {
+    // the finger is 60 px under where the ball goes
+    const snap = await layoutSnap(page)
+    const [bx, by] = mmToPx(snap, B.x, B.y)
+    const [tx, ty] = mmToPx(snap, target.x, target.y)
+    await phone.swipe([bx, by], [tx, ty + 60])
+  } else await gesture(page, B, target)
+  const B2 = await ball(B.id)
+  const whole = (Math.hypot(B2.x - A.x, B2.y - A.y) - D) / D
+  check(`${label}: a ball dragged to ~5 balls settles on exactly 5`, Math.abs(whole - 5) < 0.001, `${whole.toFixed(4)} balls`)
+  pic = await drawn()
+  const lab = pic.labels.map((l) => l.text)
+  check(`${label}: the ruler follows the ball: 5 ghosts, «5 шаров»`, lab.includes('5 шаров') && pic.ghosts.length >= 5, `${lab.join(' | ')}; ${pic.ghosts.length} ghosts`)
+  if (phone) check(`${label}: the count reads upright on the turned table`, pic.labels.every((l) => l.rotation === -90), pic.labels.map((l) => l.rotation).join(','))
+
+  // ---- the panel: the read-out, the other end, the label switch
+  ms = await measures()
+  const first = ms.find((m) => m.a === A.id && m.b === B.id)
+  await page.evaluate((id) => window.__store.getState().select(id), first.id)
+  await page.waitForTimeout(200)
+  const readout = await page.locator('[data-testid=measure-readout]').textContent()
+  check(`${label}: the panel reads «5 шаров · 5 вплотную»`, readout === '5 шаров · 5 вплотную', readout)
+  await page.locator('.props').getByRole('button', { name: 'От другого шара' }).click()
+  await page.waitForTimeout(150)
+  const flipped = (await measures()).find((m) => m.id === first.id)
+  check(`${label}: «От другого шара» starts the row at the other ball`, flipped.a === B.id && flipped.b === A.id, `${flipped.a} -> ${flipped.b}`)
+  await page.locator('.props').getByText('Подпись', { exact: true }).click()
+  await page.waitForTimeout(150)
+  check(`${label}: the label switch hides the count`, (await drawn()).labels.length === 1 && (await measures()).find((m) => m.id === first.id).label === false)
+  await page.locator('.props').getByRole('button', { name: 'Красный', exact: true }).click()
+  await page.waitForTimeout(150)
+  check(`${label}: an ink swatch recolours the ruler`, (await measures()).find((m) => m.id === first.id).color === '#FF5A4E')
+
+  // ---- a ruler goes with its ball, and comes back with it
+  await page.evaluate((id) => { const st = window.__store.getState(); st.select(id); st.removeSelected() }, B.id)
+  await page.waitForTimeout(150)
+  check(`${label}: deleting a ball takes both of its rulers with it`, (await measures()).length === 0, `${(await measures()).length} left`)
+  await page.evaluate(() => window.__store.getState().undo())
+  await page.waitForTimeout(150)
+  check(`${label}: one undo brings the ball and both rulers back`, (await measures()).length === 2 && !!(await ball(B.id)))
+
+  // ---- other table, and a reload
+  await page.evaluate(() => window.__store.getState().setGame('pool'))
+  await page.waitForTimeout(250)
+  const pool = await scene(page)
+  pic = await drawn()
+  const expect = pool.items.filter((i) => i.type === 'measure').reduce((n, m) => {
+    const a = pool.items.find((i) => i.id === m.a), b = pool.items.find((i) => i.id === m.b)
+    return n + Math.floor((Math.hypot(b.x - a.x, b.y - a.y) - pool.table.ballMm) / pool.table.ballMm + 0.02)
+  }, 0)
+  check(`${label}: on the pool table the rulers recount in pool balls`, pool.items.filter((i) => i.type === 'measure').length === 2 && pic.ghosts.length === expect, `${pic.ghosts.length} ghosts, expected ${expect}`)
+  await page.evaluate(() => window.__store.getState().setGame('pyramid'))
+  await pickCloth('Серое сукно')
+  await page.waitForTimeout(900)
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForTimeout(900)
+  const re = await scene(page)
+  check(`${label}: grey cloth and both rulers survive a reload`, re.table.cloth === 'grey' && re.items.filter((i) => i.type === 'measure').length === 2, `${re.table.cloth}, ${re.items.filter((i) => i.type === 'measure').length} rulers`)
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.setCloth('blue')
+    st.newExercise()
+    st.setTool('select')
+  })
+  await page.waitForTimeout(150)
+}
+
 async function run(viewport, dsf, label, full) {
   const { ctx, page, errors } = await newPage(viewport, dsf)
+  await clothAndRuler(page, label)
   if (full) await behaviour(page, label)
   await picture(page, label)
   await stage6(page, label)
@@ -1749,6 +1948,7 @@ if (!ONLY || ONLY === 'phone') {
     ['Выбор', 'select'], ['Белый шар', 'ball-white'], ['Биток', 'ball-cue'], ['Стрелка', 'arrow'],
     ['Траектория', 'ghost'], ['Линия', 'line'], ['Зона', 'zone-rect'], ['Эллипс', 'zone-ellipse'],
     ['Текст', 'text'], ['Точка на шаре', 'strike'], ['Сила удара', 'power'], ['Шар-призрак', 'ghost-ball'],
+    ['Расстояние в шарах', 'measure'],
   ]
   let reachable = 0
   let small = 0
@@ -1760,7 +1960,7 @@ if (!ONLY || ONLY === 'phone') {
     await b.click()
     if ((await page.evaluate(() => window.__store.getState().tool)) === id) reachable++
   }
-  check('phone: all 12 tools reachable from the dock', reachable === 12, `${reachable}/12`)
+  check(`phone: all ${toolIds.length} tools reachable from the dock`, reachable === toolIds.length, `${reachable}/${toolIds.length}`)
   check('phone: every dock button is at least 44 px', small === 0, `${small} small`)
   const stageBb = await stageBox()
   check('phone: the table takes most of the width', stageBb.width >= 360, `${stageBb.width.toFixed(0)} px`)
@@ -1943,6 +2143,8 @@ if (!ONLY || ONLY === 'phone') {
   await pool(page, 'phone')
 
   await stage6(page, 'phone')
+
+  await clothAndRuler(page, 'phone', { swipe })
 
   const ta = await page.evaluate(() => {
     const c = document.querySelector('canvas')

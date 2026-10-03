@@ -64,6 +64,16 @@ export const GLYPH = {
       <ellipse cx="9" cy="9" rx="2.6" ry="6.2" fill="none" stroke="#F5A623" strokeWidth="1" opacity=".8" />
     </>,
   ),
+  /** two balls with a row of ghosts touching between them */
+  measure: glyph(
+    <>
+      <circle cx="2.6" cy="9" r="2.1" fill="currentColor" />
+      <circle cx="6.8" cy="9" r="1.8" fill="none" stroke="currentColor" strokeWidth=".9" />
+      <circle cx="11" cy="9" r="1.8" fill="none" stroke="currentColor" strokeWidth=".9" />
+      <circle cx="15.4" cy="9" r="2.1" fill="currentColor" />
+      <path d="M2.6 13.6 H15.4 M2.6 12.6 V14.6 M15.4 12.6 V14.6" stroke="currentColor" strokeWidth=".9" strokeLinecap="round" />
+    </>,
+  ),
   undo: glyph(<path d="M7 5 L3 9 L7 13 M3 9 H11 A4 4 0 0 1 11 17 H9" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />),
   redo: glyph(<path d="M11 5 L15 9 L11 13 M15 9 H7 A4 4 0 0 0 7 17 H9" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />),
   share: glyph(<path d="M9 11 V3 M5.5 6.5 L9 3 L12.5 6.5 M4 10 V15 H14 V10" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />),
@@ -91,6 +101,7 @@ export const TOOLS: { id: Tool; label: string; short: string; icon: ReactNode }[
   { id: 'strike', label: 'Точка на шаре', short: 'Точка', icon: GLYPH.strike },
   { id: 'power', label: 'Сила удара', short: 'Сила', icon: GLYPH.power },
   { id: 'ghost-ball', label: 'Шар-призрак', short: 'Призрак', icon: GLYPH.ghostBall },
+  { id: 'measure', label: 'Расстояние в шарах', short: 'Расст.', icon: GLYPH.measure },
 ]
 
 /**

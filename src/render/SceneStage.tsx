@@ -18,10 +18,12 @@ import { STRIKE_DEFAULT_MM, dragHandle, defaultPowerWidth, type Handle } from '.
 import { gameOf, scaledPreset } from '../model/game'
 import { DEFAULT_ZONE_COLOR, ZONE_OPACITY, ghostCount } from '../model/style'
 import { newId, resolveOverlap, snapPoint } from '../lib/place'
+import { findMeasure, pickAnchor, snapWithMeasures } from '../model/measure'
 import { publishDebug } from '../lib/debug'
 import { DRAG_TOOLS, retuneGhost, useStore, type Tool } from '../state/store'
 import { useView } from '../state/view'
 import { ItemView } from './ItemView'
+import { MeasureShape } from './shapes'
 import { Handles } from './Handles'
 import { TableView } from './TableView'
 import { Watermark } from './Watermark'
@@ -34,6 +36,8 @@ const MIN_GESTURE_MM = 40
 /** on touch a dragged ball rides this far above the finger, so the finger
     never hides what it is placing */
 const LIFT_PX = 60
+/** a press this close to a ball, in screen px, starts or ends a ruler on it */
+const GRAB_PX = 22
 
 type Pinch = { dist: number; mid: Vec; view: Viewport }
 type Pan = { from: Vec; view: Viewport }
@@ -45,7 +49,8 @@ function isTouch(evt: unknown): boolean {
   return 'touches' in o || o.pointerType === 'touch'
 }
 
-type Draft = { tool: Tool; from: Vec; to: Vec }
+/** `a` is the ball a ruler is being drawn from */
+type Draft = { tool: Tool; from: Vec; to: Vec; a?: string }
 
 export type SceneStageProps = {
   stageRef: React.MutableRefObject<Konva.Stage | null>
@@ -157,8 +162,9 @@ export function SceneStage({ stageRef }: SceneStageProps) {
     (id: string, raw: Vec) => {
       const st = useStore.getState()
       const ballMm = st.scene.table.ballMm
-      let p = clampToField(g, raw, ballMm)
-      p = clampToField(g, snapPoint(g, p, st.snap), ballMm)
+      const free = clampToField(g, raw, ballMm)
+      const grid = clampToField(g, snapPoint(g, free, st.snap), ballMm)
+      let p = st.snap ? clampToField(g, snapWithMeasures(st.scene.items, id, free, grid, ballMm), ballMm) : grid
       p = resolveOverlap(g, st.scene.items, id, p, ballMm, st.noOverlap)
       return p
     },
@@ -189,6 +195,15 @@ export function SceneStage({ stageRef }: SceneStageProps) {
         // a zoomed picture slides under one finger; the tap still deselects
         const pos = stageRef.current?.getPointerPosition()
         if (pos) panRef.current = { from: pos, view: useView.getState().viewport }
+        return
+      }
+      if (st.tool === 'measure') {
+        // a ruler hangs between two balls, so it can only start on one
+        e.evt.preventDefault()
+        const hit = pickAnchor(st.scene.items, p, st.scene.table.ballMm, GRAB_PX / layoutRef.current.scale)
+        if (!hit) return
+        dragging.current = true
+        setDraft({ tool: 'measure', from: hit.at, to: p, a: hit.id })
         return
       }
       if (DRAG_TOOLS.includes(st.tool)) {
@@ -356,6 +371,21 @@ export function SceneStage({ stageRef }: SceneStageProps) {
       setDraft((d) => {
         if (!d) return null
         const st = useStore.getState()
+        if (d.tool === 'measure') {
+          // released on another ball: that is the ruler; anywhere else, nothing
+          const end = raw ?? d.to
+          const hit = d.a
+            ? pickAnchor(st.scene.items, end, st.scene.table.ballMm, GRAB_PX / layoutRef.current.scale, d.a)
+            : null
+          if (!d.a || !hit) return null
+          const same = findMeasure(st.scene.items, d.a, hit.id)
+          if (same) {
+            st.select(same.id)
+            return null
+          }
+          st.addItem({ id: newId('measure'), type: 'measure', a: d.a, b: hit.id, color: st.draft.ink, label: true }, 'bottom')
+          return null
+        }
         const to = raw ? snapPt(raw) : d.to
         const len = Math.hypot(to.x - d.from.x, to.y - d.from.y)
         const isZone = d.tool === 'zone-rect' || d.tool === 'zone-ellipse'
@@ -690,7 +720,7 @@ export function SceneStage({ stageRef }: SceneStageProps) {
 
   /** the gesture in progress, drawn like the object it is about to become */
   const preview = useMemo<Item | null>(() => {
-    if (!draft) return null
+    if (!draft || draft.tool === 'measure') return null
     const { from, to } = draft
     const st = useStore.getState()
     const ds = st.draft
@@ -724,6 +754,14 @@ export function SceneStage({ stageRef }: SceneStageProps) {
         }
     }
   }, [draft, table])
+
+  /** a ruler being drawn: from its ball to the ball under the pointer, or
+      to the pointer itself while it is over open cloth */
+  const measureDraft = useMemo(() => {
+    if (!draft || draft.tool !== 'measure' || !draft.a) return null
+    const hit = pickAnchor(items, draft.to, table.ballMm, GRAB_PX / layout.scale, draft.a)
+    return { a: draft.from, b: hit ? hit.at : draft.to }
+  }, [draft, items, table.ballMm, layout.scale])
 
   const noop = useCallback(() => {}, [])
 
@@ -811,7 +849,22 @@ export function SceneStage({ stageRef }: SceneStageProps) {
                 />
               </Group>
             )}
-            {selecting && selected && selected.type !== 'ball' && selected.type !== 'ghostBall' && (
+            {measureDraft && (
+              <Group listening={false} opacity={0.85}>
+                <MeasureShape
+                  a={measureDraft.a}
+                  b={measureDraft.b}
+                  ballMm={table.ballMm}
+                  color={useStore.getState().draft.ink}
+                  label
+                  selected={false}
+                  counter={-layout.rotation}
+                  toward={{ x: table.lengthMm / 2, y: table.widthMm / 2 }}
+                  scale={layout.scale}
+                />
+              </Group>
+            )}
+            {selecting && selected && selected.type !== 'ball' && selected.type !== 'ghostBall' && selected.type !== 'measure' && (
               <Handles
                 item={selected}
                 scale={layout.scale}
@@ -845,6 +898,13 @@ export function StageHint() {
       <p className="stage-wrap__hint">
         <span>Нажмите на стол, чтобы поставить шар с точкой удара.</span>{' '}
         <span className="stage-wrap__keys">Двойной клик по нему - прицельный шар сзади; тяните его вбок, чтобы показать, какой частью бьём.</span>
+      </p>
+    )
+  if (tool === 'measure')
+    return (
+      <p className="stage-wrap__hint">
+        <span>Нажмите на шар и протяните до другого шара: между ними встанут шары-призраки вплотную.</span>{' '}
+        <span className="stage-wrap__keys">С магнитом шар, который тянут, встаёт ровно на целое число шаров.</span>
       </p>
     )
   if (tool === 'power' || tool === 'ghost-ball')

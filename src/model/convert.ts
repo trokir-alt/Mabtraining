@@ -129,6 +129,9 @@ export function convertScene(scene: Scene, game: Game): Scene {
         return { ...it, ...P(it), sizeMm: clamp(onPreset(it.sizeMm, STRIKE_SIZES, from, to), strikeRange(to)) }
       case 'power':
         return { ...it, ...P(it), widthMm: clamp(Math.round(it.widthMm * k), powerRange(to)) }
+      case 'measure':
+        // it hangs on its balls by id, and they keep their ids
+        return it
     }
   })
 

@@ -35,6 +35,7 @@ import {
 } from '../model/item'
 import { gameOf, isPool, scaledPreset } from '../model/game'
 import { convertScene, nextPoolNumber } from '../model/convert'
+import { pruneMeasures, snapWithMeasures } from '../model/measure'
 import {
   DEFAULT_HEAD,
   DEFAULT_INK,
@@ -76,6 +77,7 @@ export type Tool =
   | 'strike'
   | 'power'
   | 'ghost-ball'
+  | 'measure'
 
 /** where a new object lands in the z-order */
 export type Placement = 'top' | 'bottom' | 'belowText'
@@ -445,8 +447,9 @@ export const useStore = create<AppState>()(
         const ballMm = scene.table.ballMm
         const item = scene.items.find((i) => i.id === id)
         if (!item || item.type !== 'ball') return
-        let p = clampToField(g, at, ballMm)
-        p = clampToField(g, snapPoint(g, p, snap), ballMm)
+        const raw = clampToField(g, at, ballMm)
+        const grid = clampToField(g, snapPoint(g, raw, snap), ballMm)
+        let p = snap ? clampToField(g, snapWithMeasures(scene.items, id, raw, grid, ballMm), ballMm) : grid
         p = resolveOverlap(g, scene.items, id, p, ballMm, noOverlap)
         set((s) => patchItem(s, id, { x: p.x, y: p.y } as Partial<Item>))
       },
@@ -455,7 +458,9 @@ export const useStore = create<AppState>()(
         const { selectedId, scene, noOverlap } = get()
         if (!selectedId) return
         const item = scene.items.find((i) => i.id === selectedId)
-        if (!item) return
+        // a ruler goes where its balls go; nudging it alone would be a no-op
+        // with an undo step attached
+        if (!item || item.type === 'measure') return
         if (item.type === 'ball') {
           const g = geom()
           const ballMm = scene.table.ballMm
@@ -474,7 +479,8 @@ export const useStore = create<AppState>()(
         const { selectedId } = get()
         if (!selectedId) return
         edit((s) => {
-          s.scene.items = s.scene.items.filter((i) => i.id !== selectedId)
+          // a ruler hanging on the ball goes with it, in the same undo step
+          s.scene.items = pruneMeasures(s.scene.items.filter((i) => i.id !== selectedId))
           s.selectedId = null
         })
       },
@@ -482,7 +488,9 @@ export const useStore = create<AppState>()(
       duplicateSelected: () => {
         const { selectedId, scene } = get()
         const item = scene.items.find((i) => i.id === selectedId)
-        if (!item) return
+        // a copy of a ruler would lie exactly on the original: it is the two
+        // balls that make it, and those have not been copied
+        if (!item || item.type === 'measure') return
         // 90 mm clears a ball but not a 600 mm pair of magnified ones: a copy
         // landing on top of its original reads as a rendering fault
         const b = itemBounds(item, scene.table.ballMm)
@@ -547,7 +555,7 @@ export const useStore = create<AppState>()(
         balls.push({ id: newId('ball'), type: 'ball', x: cue.x, y: cue.y, kind: 'cue' })
         edit((s) => {
           // keep everything that is not a ball: the drawing survives a re-rack
-          s.scene.items = [...s.scene.items.filter((i) => i.type !== 'ball'), ...balls]
+          s.scene.items = pruneMeasures([...s.scene.items.filter((i) => i.type !== 'ball'), ...balls])
           s.selectedId = null
         })
       },
@@ -567,7 +575,7 @@ export const useStore = create<AppState>()(
         const cue = housePoint(g)
         balls.push({ id: newId('ball'), type: 'ball', x: cue.x, y: cue.y, kind: 'cue' })
         edit((s) => {
-          s.scene.items = [...s.scene.items.filter((i) => i.type !== 'ball'), ...balls]
+          s.scene.items = pruneMeasures([...s.scene.items.filter((i) => i.type !== 'ball'), ...balls])
           s.selectedId = null
         })
       },

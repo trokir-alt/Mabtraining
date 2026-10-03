@@ -8,6 +8,7 @@
 import type { Item, StrikePointItem, Vec } from './types'
 import { quadControl } from './style'
 import { GAME_ORDER, scaledPreset } from './game'
+import { measureEnds } from './measure'
 
 export type Rect = { x: number; y: number; w: number; h: number }
 
@@ -30,11 +31,17 @@ export function translateItem(item: Item, dx: number, dy: number): Item {
       return { ...item, from: v(item.from, dx, dy), to: v(item.to, dx, dy) }
     case 'ghostTrail':
       return { ...item, from: v(item.from, dx, dy), to: v(item.to, dx, dy) }
+    case 'measure':
+      // it has no position of its own: it goes where its two balls go
+      return item
   }
 }
 
-/** Axis-aligned bounds, used to place the properties panel and to hit-test. */
-export function itemBounds(item: Item, ballMm: number): Rect {
+/**
+ * Axis-aligned bounds, used to place the properties panel and to hit-test.
+ * A ruler is placed by its balls, so it needs the scene's items to have any.
+ */
+export function itemBounds(item: Item, ballMm: number, items: Item[] = []): Rect {
   const box = (xs: number[], ys: number[], pad = 0): Rect => {
     const x0 = Math.min(...xs) - pad
     const y0 = Math.min(...ys) - pad
@@ -68,6 +75,11 @@ export function itemBounds(item: Item, ballMm: number): Rect {
       return box([item.from.x, item.to.x], [item.from.y, item.to.y], item.width)
     case 'ghostTrail':
       return box([item.from.x, item.to.x], [item.from.y, item.to.y], ballMm / 2)
+    case 'measure': {
+      const ends = measureEnds(item, items)
+      if (!ends) return { x: 0, y: 0, w: 0, h: 0 }
+      return box([ends[0].x, ends[1].x], [ends[0].y, ends[1].y], ballMm / 2)
+    }
   }
 }
 

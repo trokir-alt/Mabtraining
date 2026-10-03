@@ -9,6 +9,7 @@
 import { useState } from 'react'
 import { selectCanRedo, selectCanUndo, useStore, type Tool } from '../state/store'
 import { BALL_SIZES } from '../model/table'
+import { CLOTH_SWATCHES } from '../model/theme'
 import type { ExportFormat } from '../lib/exportImage'
 
 export type ToolbarProps = {
@@ -180,8 +181,9 @@ export function Toolbar({ onExport, onCopy, onOpenLibrary }: ToolbarProps) {
           <div className="row">
             <span className="row__label">Сукно</span>
             <span className="row__control">
-              <button type="button" className="swatch" style={{ background: '#1D6FA8' }} aria-pressed={cloth === 'blue'} aria-label="Синее сукно" title="Синее сукно" onClick={() => setCloth('blue')} />
-              <button type="button" className="swatch" style={{ background: '#1F6B41' }} aria-pressed={cloth === 'green'} aria-label="Зелёное сукно" title="Зелёное сукно" onClick={() => setCloth('green')} />
+              {CLOTH_SWATCHES.map((c) => (
+                <button key={c.id} type="button" className="swatch swatch--cloth" style={{ background: c.swatch }} aria-pressed={cloth === c.id} aria-label={c.label} title={c.label} onClick={() => setCloth(c.id)} />
+              ))}
             </span>
           </div>
 

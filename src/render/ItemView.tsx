@@ -9,13 +9,14 @@
 
 import { Circle, Group } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import type { Game, Item } from '../model/types'
+import type { Game, Item, MeasureItem } from '../model/types'
 import { BallShape } from './BallShape'
 import {
   ArrowShape,
   GhostBallShape,
   GhostTrailShape,
   LineShape,
+  MeasureShape,
   PowerShape,
   StrikePointShape,
   TextShape,
@@ -78,10 +79,54 @@ function inner(item: Item, ballMm: number, game: Game, selected: boolean, scale:
   }
 }
 
+/** one coordinate of a ball by id, NaN once it is gone: a primitive, so the
+    selector below never hands zustand a fresh object to re-render on */
+const coord = (items: Item[], id: string, axis: 'x' | 'y'): number => {
+  const it = items.find((i) => i.id === id)
+  return it && (it.type === 'ball' || it.type === 'ghostBall') ? it[axis] : NaN
+}
+
+/**
+ * A ruler reads its balls straight from the store, so it follows a ball
+ * frame by frame while the ball is dragged and nothing else re-renders.
+ */
+function MeasureView({ item, ballMm, selected }: { item: MeasureItem; ballMm: number; selected: boolean }) {
+  const ax = useStore((s) => coord(s.scene.items, item.a, 'x'))
+  const ay = useStore((s) => coord(s.scene.items, item.a, 'y'))
+  const bx = useStore((s) => coord(s.scene.items, item.b, 'x'))
+  const by = useStore((s) => coord(s.scene.items, item.b, 'y'))
+  const lengthMm = useStore((s) => s.scene.table.lengthMm)
+  const widthMm = useStore((s) => s.scene.table.widthMm)
+  const rotation = useView((s) => s.layout?.rotation ?? 0)
+  const scale = useView((s) => s.layout?.scale ?? 0.3)
+  if (![ax, ay, bx, by].every(Number.isFinite)) return null
+  return (
+    <MeasureShape
+      a={{ x: ax, y: ay }}
+      b={{ x: bx, y: by }}
+      ballMm={ballMm}
+      color={item.color}
+      label={item.label}
+      selected={selected}
+      counter={-rotation}
+      toward={{ x: lengthMm / 2, y: widthMm / 2 }}
+      scale={scale}
+    />
+  )
+}
+
 export function ItemView({ item, ballMm, game, onEdit, ...rest }: ItemViewProps) {
   const scale = useView((s) => s.layout?.scale ?? 0.3)
   if (item.type === 'ball') return <BallShape item={item} ballMm={ballMm} game={game} scale={scale} {...rest} />
   const { selected, ...handlers } = rest
+  // a ruler is not dragged: it goes where its balls go
+  if (item.type === 'measure') {
+    return (
+      <Group id={item.id} name="measure" onMouseDown={handlers.onSelect} onTouchStart={handlers.onSelect}>
+        <MeasureView item={item} ballMm={ballMm} selected={selected} />
+      </Group>
+    )
+  }
   // the wireframe ball is positioned like a real ball, so the stage can clamp
   // and contact-snap it from the node's own coordinates
   if (item.type === 'ghostBall') {

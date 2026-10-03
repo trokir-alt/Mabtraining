@@ -37,7 +37,35 @@ export const CLOTH: Record<ClothColor, ClothPalette> = {
     cushionShade: '#0A2D1E',
     vignette: '#052318',
   },
+  // a tournament red, deep rather than bright: the step from felt to rubber
+  // keeps the same ratio as blue and green, so the cushion still reads
+  red: {
+    clothLight: '#B7333C',
+    clothDark: '#97242F',
+    cushion: '#5C1520',
+    cushionShade: '#3D0D15',
+    vignette: '#2C080F',
+  },
+  // a cool steel grey; light enough that a black ball and the black 8 still
+  // separate from it, dark enough that a white ball keeps its edge
+  grey: {
+    clothLight: '#7E8A94',
+    clothDark: '#69747E',
+    cushion: '#3E464E',
+    cushionShade: '#2A3037',
+    vignette: '#1B2025',
+  },
 }
+
+/** the cloths offered in the settings, in the order they are shown */
+export const CLOTH_SWATCHES: { id: ClothColor; label: string; swatch: string }[] = [
+  { id: 'blue', label: 'Синее сукно', swatch: '#1D6FA8' },
+  { id: 'green', label: 'Зелёное сукно', swatch: '#1F6B41' },
+  { id: 'red', label: 'Красное сукно', swatch: '#A52A35' },
+  { id: 'grey', label: 'Серое сукно', swatch: '#727D87' },
+]
+
+export const isCloth = (v: unknown): v is ClothColor => typeof v === 'string' && v in CLOTH
 
 export const WOOD = {
   // spec section 5 names this range for the rail outright

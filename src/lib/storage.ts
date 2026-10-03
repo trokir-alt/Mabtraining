@@ -17,6 +17,8 @@ import { POWER_VALUES } from '../model/types'
 import { DEFAULT_TABLE } from '../model/table'
 import { POWER_DEFAULT_MM, STRIKE_DEFAULT_MM, powerRange, strikeRange } from '../model/item'
 import { gameOf, scaledPreset } from '../model/game'
+import { isCloth } from '../model/theme'
+import { pruneMeasures } from '../model/measure'
 import { DEFAULT_DENSITY, isDensity, type Density } from '../brand/watermark'
 import { DEFAULT_FULLNESS, clampFullness, normDeg } from '../model/item'
 
@@ -189,6 +191,12 @@ function parseItem(raw: unknown, table: TableConfig): Item | null {
       if (!p) return null
       return { id, type: 'ghostBall', x: p.x, y: p.y }
     }
+    case 'measure': {
+      const a = str(o.a)
+      const b = str(o.b)
+      if (!a || !b || a === b) return null
+      return { id, type: 'measure', a, b, color: str(o.color) ?? '#FFFFFF', label: o.label !== false }
+    }
     default:
       return null
   }
@@ -199,7 +207,7 @@ function parseScene(raw: unknown): Scene | null {
   const o = raw as Record<string, unknown>
   if (o.version !== 1) return null
   const t = (o.table ?? {}) as Record<string, unknown>
-  const cloth: ClothColor = t.cloth === 'green' ? 'green' : 'blue'
+  const cloth: ClothColor = isCloth(t.cloth) ? t.cloth : 'blue'
   const table: TableConfig = {
     // written only for pool, as tableFor does, so a pyramid scene reads back
     // exactly as it was saved
@@ -210,8 +218,9 @@ function parseScene(raw: unknown): Scene | null {
     markings: t.markings !== false,
     cloth,
   }
+  // a ruler whose ball did not survive the parse has nothing to measure
   const items = Array.isArray(o.items)
-    ? o.items.map((i) => parseItem(i, table)).filter((i): i is Item => i !== null)
+    ? pruneMeasures(o.items.map((i) => parseItem(i, table)).filter((i): i is Item => i !== null))
     : []
   return {
     version: 1,

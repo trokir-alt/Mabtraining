@@ -39,6 +39,7 @@ import {
   sideFromOffset,
   sideSign,
 } from '../model/item'
+import { formatBalls, measureLayout } from '../model/measure'
 import { BRAND } from '../brand/assets'
 import { BRAND_FONT, CANVAS_FONT } from '../model/fonts'
 import { BALL, POOL_GENERIC } from '../model/theme'
@@ -609,6 +610,134 @@ export function GhostBallShape({ item, ballMm }: { item: GhostBallItem; ballMm: 
       <Ellipse radiusX={r * 0.42} radiusY={r} stroke={ORANGE} strokeWidth={2.2} opacity={0.9} listening={false} />
       <KLine points={[-r * 0.2, 0, r * 0.2, 0]} stroke={ORANGE} strokeWidth={2.2} listening={false} />
       <KLine points={[0, -r * 0.2, 0, r * 0.2]} stroke={ORANGE} strokeWidth={2.2} listening={false} />
+    </Group>
+  )
+}
+
+/* ------------------------------------------------------------ ball ruler */
+
+export type MeasureShapeProps = {
+  /** centres of the two balls */
+  a: Vec
+  b: Vec
+  ballMm: number
+  color: string
+  label: boolean
+  selected: boolean
+  /** degrees that undo the stage's own turn, so the figures read upright */
+  counter: number
+  /** the label goes on the side of the row facing this point: the cloth's middle */
+  toward: Vec
+  /** screen px per mm: on a phone the table is small, and a ring a third of
+      a pixel wide or a 9 px count is there without being seen */
+  scale: number
+}
+
+/**
+ * The row of ghosts between two balls, each touching the next, numbered so a
+ * student can count them, and the count beside the row.
+ *
+ * The ghosts are the table's own ball - a ruler in some other unit would
+ * quietly lie about how many real balls fit.
+ */
+export function MeasureShape({ a, b, ballMm, color, label, selected, counter, toward, scale }: MeasureShapeProps) {
+  const L = measureLayout(a, b, ballMm)
+  const r = ballMm / 2
+  const px = 1 / Math.max(scale, 1e-3)
+  const sw = Math.max(ballMm * 0.045, 1.4 * px)
+  const mid = { x: (L.start.x + L.end.x) / 2, y: (L.start.y + L.end.y) / 2 }
+  let n = { x: -L.u.y, y: L.u.x }
+  if ((toward.x - mid.x) * n.x + (toward.y - mid.y) * n.y < 0) n = { x: -n.x, y: -n.y }
+  const fs = Math.max(ballMm * 0.9, 12 * px)
+  const text = formatBalls(L.balls)
+  /**
+   * How far out the label sits. It is drawn upright on the screen whatever
+   * the row's direction, so a row that runs up the screen has the label's
+   * whole width across it: the offset is the label box's reach towards the
+   * row, plus the ghost's radius, plus air. The width is an estimate (bold
+   * sans runs ~0.56 em a character); a little too much air is harmless.
+   */
+  const c = (counter * Math.PI) / 180
+  const across = Math.abs(n.x * Math.cos(c) + n.y * Math.sin(c))
+  const along = Math.abs(-n.x * Math.sin(c) + n.y * Math.cos(c))
+  const reach = ((text.length * 0.56 * fs) / 2) * across + (fs / 2) * along
+  const off = r + ballMm * 0.25 + reach
+  const at = { x: mid.x + n.x * off, y: mid.y + n.y * off }
+  const textW = ballMm * 8
+  const numFs = ballMm * 0.5
+  const last = L.ghosts[L.ghosts.length - 1]
+  const rest = last ? { x: last.x + L.u.x * r, y: last.y + L.u.y * r } : L.start
+  // a short bar across the row at each ball's surface: where the count starts and ends
+  const tick = (p: Vec) => [p.x - n.x * r * 0.7, p.y - n.y * r * 0.7, p.x + n.x * r * 0.7, p.y + n.y * r * 0.7]
+  return (
+    <Group>
+      {/* the gaps are most of the row; this makes all of it grabbable */}
+      <KLine points={[a.x, a.y, b.x, b.y]} stroke="rgba(0,0,0,0)" strokeWidth={1} hitStrokeWidth={ballMm} />
+      {selected && (
+        <KLine
+          points={[L.start.x, L.start.y, L.end.x, L.end.y]}
+          stroke="#FFD166"
+          strokeWidth={sw * 2.4}
+          dash={[ballMm * 0.32, ballMm * 0.2]}
+          lineCap="round"
+          listening={false}
+        />
+      )}
+      {/* the dashes are only the part no whole ball fills: through the ghosts
+          they would run across the numbers */}
+      {Math.hypot(L.end.x - rest.x, L.end.y - rest.y) > 1 && (
+        <KLine
+          points={[rest.x, rest.y, L.end.x, L.end.y]}
+          stroke={color}
+          strokeWidth={sw * 0.8}
+          dash={[ballMm * 0.18, ballMm * 0.12]}
+          opacity={0.75}
+          listening={false}
+        />
+      )}
+      <KLine points={tick(L.start)} stroke={color} strokeWidth={sw} lineCap="round" opacity={0.9} listening={false} />
+      <KLine points={tick(L.end)} stroke={color} strokeWidth={sw} lineCap="round" opacity={0.9} listening={false} />
+      {L.ghosts.map((g, i) => (
+        <Group key={i} x={g.x} y={g.y} name="measure-ghost">
+          <Circle radius={r - sw / 2} fill={color} opacity={0.14} />
+          <Circle radius={r - sw / 2} stroke={color} strokeWidth={sw} opacity={0.9} listening={false} />
+          <Text
+            text={String(i + 1)}
+            fontSize={numFs}
+            fontFamily={CANVAS_FONT}
+            fontStyle="bold"
+            fill={color}
+            opacity={0.9}
+            width={ballMm}
+            align="center"
+            offsetX={ballMm / 2}
+            offsetY={numFs / 2}
+            rotation={counter}
+            listening={false}
+          />
+        </Group>
+      ))}
+      {label && (
+        <Text
+          name="measure-label"
+          x={at.x}
+          y={at.y}
+          text={text}
+          fontSize={fs}
+          fontFamily={CANVAS_FONT}
+          fontStyle="bold"
+          fill={color}
+          width={textW}
+          align="center"
+          offsetX={textW / 2}
+          offsetY={fs / 2}
+          rotation={counter}
+          shadowColor="rgba(0,0,0,0.55)"
+          shadowBlur={fs * 0.22}
+          shadowForStrokeEnabled={false}
+          listening={false}
+        />
+      )}
     </Group>
   )
 }

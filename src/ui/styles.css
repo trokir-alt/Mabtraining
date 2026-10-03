@@ -1402,3 +1402,10 @@ kbd {
   padding: 0 4px;
   font-size: 13px;
 }
+
+/* four cloths share the row with their label on the desktop panel; a mouse
+   does not need the 44 px a finger does, and the phone sheet keeps them */
+.toolbar .swatch--cloth {
+  width: 38px;
+  height: 38px;
+}
