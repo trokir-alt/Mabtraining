@@ -341,6 +341,19 @@ export function Properties() {
 
       {hasMeasure && (
         <div className="props__row">
+          <span className="seg" role="group" aria-label="Призраки">
+            <button type="button" className="btn seg__btn" aria-pressed={!item.fill} onClick={() => st.updateItem(item.id, { fill: false })}>
+              Контур
+            </button>
+            <button type="button" className="btn seg__btn" aria-pressed={item.fill === true} onClick={() => st.updateItem(item.id, { fill: true })}>
+              Закрашенные
+            </button>
+          </span>
+        </div>
+      )}
+
+      {hasMeasure && (
+        <div className="props__row">
           <label className="switch switch--inline">
             <span className="switch__label">Подпись</span>
             <input type="checkbox" className="switch__input" checked={item.label} onChange={() => st.updateItem(item.id, { label: !item.label })} />

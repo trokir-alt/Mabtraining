@@ -29,6 +29,7 @@ import { useIsMobile } from './ui/useMedia'
 import { STAMP_SVG } from './brand/assets'
 import { preloadSvgImages } from './brand/svgImage'
 import { MobileShell } from './ui/mobile/MobileShell'
+import { HelpPopup } from './ui/help'
 import './ui/styles.css'
 
 /**
@@ -177,6 +178,7 @@ export function App() {
           onOpenLibrary={() => setLibraryOpen(true)}
         />
         {libraryOpen && <Library onClose={() => { setLibraryOpen(false); syncNow() }} />}
+        <HelpPopup />
         {toast && (
           <div className={toast.error ? 'toast toast--error' : 'toast'} role="status" onClick={() => setToast(null)}>
             {toast.text}
@@ -198,6 +200,7 @@ export function App() {
         <TextEditor />
       </main>
       {libraryOpen && <Library onClose={() => { setLibraryOpen(false); syncNow() }} />}
+      <HelpPopup />
       {toast && (
         <div className={toast.error ? 'toast toast--error' : 'toast'} role="status" onClick={() => setToast(null)}>
           {toast.text}

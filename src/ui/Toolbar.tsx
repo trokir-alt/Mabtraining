@@ -23,6 +23,7 @@ export type ToolbarProps = {
 const EXPORT_SCALES = [1, 2, 3]
 
 import { toolsFor } from './tools'
+import { HelpDot, HelpGeneralButton } from './help'
 import { GamePicker, RackButtons } from './GameControls'
 import { useGame } from './useGame'
 import { BrandLockup } from './Brand'
@@ -74,23 +75,26 @@ export function Toolbar({ onExport, onCopy, onOpenLibrary }: ToolbarProps) {
             <span className="btn__hint">{libraryCount}</span>
           </button>
           <SyncBadge />
+          <HelpGeneralButton className="btn btn--quiet" />
         </div>
       </section>
       <section className="tool-group">
         <h2 className="tool-group__title">Инструменты</h2>
         <div className="tool-group__body tool-grid">
           {toolsFor(game).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              className={tool === t.id ? 'btn btn--tool is-active' : 'btn btn--tool'}
-              aria-pressed={tool === t.id}
-              onClick={() => pick(t.id)}
-              title={t.label}
-            >
-              {t.icon}
-              <span>{t.label}</span>
-            </button>
+            <div key={t.id} className="tool-cell">
+              <button
+                type="button"
+                className={tool === t.id ? 'btn btn--tool is-active' : 'btn btn--tool'}
+                aria-pressed={tool === t.id}
+                onClick={() => pick(t.id)}
+                title={t.label}
+              >
+                {t.icon}
+                <span>{t.label}</span>
+              </button>
+              <HelpDot tool={t.id} label={t.label} />
+            </div>
           ))}
         </div>
       </section>

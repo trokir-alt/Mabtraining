@@ -48,8 +48,11 @@ import { BALL, POOL_GENERIC } from '../model/theme'
 const dashFor = (w: number, style: string): number[] | undefined =>
   style === 'dashed' ? [w * 2.2, w * 1.7] : undefined
 
-/** anything thinner than this is miserable to grab on a tablet */
-const hitWidth = (w: number) => Math.max(w * 2, 60)
+/**
+ * anything thinner than this is miserable to grab on a tablet; `minMm` is the
+ * screen's own minimum (see render/hit), converted to table millimetres
+ */
+const hitWidth = (w: number, minMm = 0) => Math.max(w * 2, 60, minMm)
 
 /** an arrowhead as a filled triangle pointing along `dir` */
 function head(ctx: Context, tip: Vec, dir: Vec, w: number): void {
@@ -64,7 +67,7 @@ function head(ctx: Context, tip: Vec, dir: Vec, w: number): void {
   ctx.closePath()
 }
 
-export function ArrowShape({ item }: { item: ArrowItem }) {
+export function ArrowShape({ item, minHit = 0 }: { item: ArrowItem; minHit?: number }) {
   const { a, c, b } = arrowCurve(item.points)
   // tangents of the quadratic at its ends; for a straight arrow that is the chord
   const dirEnd = c ? { x: b.x - c.x, y: b.y - c.y } : { x: b.x - a.x, y: b.y - a.y }
@@ -84,7 +87,7 @@ export function ArrowShape({ item }: { item: ArrowItem }) {
         dash={dashFor(item.width, item.style)}
         lineCap="round"
         lineJoin="round"
-        hitStrokeWidth={hitWidth(item.width)}
+        hitStrokeWidth={hitWidth(item.width, minHit)}
       />
       {item.head !== 'none' && (
         <Shape
@@ -102,7 +105,7 @@ export function ArrowShape({ item }: { item: ArrowItem }) {
   )
 }
 
-export function LineShape({ item }: { item: LineItem }) {
+export function LineShape({ item, minHit = 0 }: { item: LineItem; minHit?: number }) {
   return (
     <KLine
       points={[item.from.x, item.from.y, item.to.x, item.to.y]}
@@ -110,7 +113,7 @@ export function LineShape({ item }: { item: LineItem }) {
       strokeWidth={item.width}
       dash={dashFor(item.width, item.style)}
       lineCap="round"
-      hitStrokeWidth={hitWidth(item.width)}
+      hitStrokeWidth={hitWidth(item.width, minHit)}
     />
   )
 }
@@ -121,7 +124,7 @@ export function LineShape({ item }: { item: LineItem }) {
  * The ghosts are real balls, at the table's own ball diameter - decorative
  * circles of some other size would quietly lie about whether a shot fits.
  */
-export function GhostTrailShape({ item, ballMm }: { item: GhostTrailItem; ballMm: number }) {
+export function GhostTrailShape({ item, ballMm, minHit = 0 }: { item: GhostTrailItem; ballMm: number; minHit?: number }) {
   const n = Math.max(2, item.count)
   const dx = item.to.x - item.from.x
   const dy = item.to.y - item.from.y
@@ -143,7 +146,7 @@ export function GhostTrailShape({ item, ballMm }: { item: GhostTrailItem; ballMm
         points={[item.from.x, item.from.y, item.to.x, item.to.y]}
         stroke="rgba(0,0,0,0)"
         strokeWidth={1}
-        hitStrokeWidth={ballMm}
+        hitStrokeWidth={Math.max(ballMm, minHit)}
       />
       {ghosts.map((g, i) => (
         <Circle
@@ -631,6 +634,19 @@ export type MeasureShapeProps = {
   /** screen px per mm: on a phone the table is small, and a ring a third of
       a pixel wide or a 9 px count is there without being seen */
   scale: number
+  /** ghosts filled with the colour rather than drawn as rings */
+  fill?: boolean
+  /** the narrowest band, in mm, the row can be picked up by; see render/hit */
+  minHit?: number
+}
+
+/** dark figures on a light fill, white ones on a dark fill */
+function figureOn(color: string): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(color)
+  if (!m) return '#FFFFFF'
+  const n = parseInt(m[1], 16)
+  const lum = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)
+  return lum > 140 ? '#1B2430' : '#FFFFFF'
 }
 
 /**
@@ -640,7 +656,7 @@ export type MeasureShapeProps = {
  * The ghosts are the table's own ball - a ruler in some other unit would
  * quietly lie about how many real balls fit.
  */
-export function MeasureShape({ a, b, ballMm, color, label, selected, counter, toward, scale }: MeasureShapeProps) {
+export function MeasureShape({ a, b, ballMm, color, label, selected, counter, toward, scale, fill = false, minHit = 0 }: MeasureShapeProps) {
   const L = measureLayout(a, b, ballMm)
   const r = ballMm / 2
   const px = 1 / Math.max(scale, 1e-3)
@@ -672,7 +688,7 @@ export function MeasureShape({ a, b, ballMm, color, label, selected, counter, to
   return (
     <Group>
       {/* the gaps are most of the row; this makes all of it grabbable */}
-      <KLine points={[a.x, a.y, b.x, b.y]} stroke="rgba(0,0,0,0)" strokeWidth={1} hitStrokeWidth={ballMm} />
+      <KLine points={[a.x, a.y, b.x, b.y]} stroke="rgba(0,0,0,0)" strokeWidth={1} hitStrokeWidth={Math.max(ballMm, minHit)} />
       {selected && (
         <KLine
           points={[L.start.x, L.start.y, L.end.x, L.end.y]}
@@ -699,14 +715,14 @@ export function MeasureShape({ a, b, ballMm, color, label, selected, counter, to
       <KLine points={tick(L.end)} stroke={color} strokeWidth={sw} lineCap="round" opacity={0.9} listening={false} />
       {L.ghosts.map((g, i) => (
         <Group key={i} x={g.x} y={g.y} name="measure-ghost">
-          <Circle radius={r - sw / 2} fill={color} opacity={0.14} />
+          <Circle radius={r - sw / 2} fill={color} opacity={fill ? 0.88 : 0.14} />
           <Circle radius={r - sw / 2} stroke={color} strokeWidth={sw} opacity={0.9} listening={false} />
           <Text
             text={String(i + 1)}
             fontSize={numFs}
             fontFamily={CANVAS_FONT}
             fontStyle="bold"
-            fill={color}
+            fill={fill ? figureOn(color) : color}
             opacity={0.9}
             width={ballMm}
             align="center"

@@ -24,6 +24,7 @@ import {
 } from './shapes'
 import { useStore } from '../state/store'
 import { useView } from '../state/view'
+import { lineHitPx } from './hit'
 
 export type ItemViewProps = {
   item: Item
@@ -65,13 +66,13 @@ function inner(item: Item, ballMm: number, game: Game, selected: boolean, scale:
         />
       )
     case 'arrow':
-      return <ArrowShape item={item} />
+      return <ArrowShape item={item} minHit={lineHitPx() / scale} />
     case 'ghostTrail':
-      return <GhostTrailShape item={item} ballMm={ballMm} />
+      return <GhostTrailShape item={item} ballMm={ballMm} minHit={lineHitPx() / scale} />
     case 'zone':
       return <ZoneShape item={item} />
     case 'line':
-      return <LineShape item={item} />
+      return <LineShape item={item} minHit={lineHitPx() / scale} />
     case 'text':
       return <TextShape item={item} />
     default:
@@ -111,6 +112,8 @@ function MeasureView({ item, ballMm, selected }: { item: MeasureItem; ballMm: nu
       counter={-rotation}
       toward={{ x: lengthMm / 2, y: widthMm / 2 }}
       scale={scale}
+      fill={item.fill === true}
+      minHit={lineHitPx() / scale}
     />
   )
 }

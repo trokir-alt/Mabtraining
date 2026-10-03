@@ -16,7 +16,9 @@ import type {
   BallKind,
   ClothColor,
   Game,
+  GhostBallItem,
   Item,
+  MeasureItem,
   Orientation,
   PowerValue,
   Scene,
@@ -35,7 +37,7 @@ import {
 } from '../model/item'
 import { gameOf, isPool, scaledPreset } from '../model/game'
 import { convertScene, nextPoolNumber } from '../model/convert'
-import { pruneMeasures, snapWithMeasures } from '../model/measure'
+import { anchorAt, pruneMeasures, settleEnd, snapToMeasures, snapWithMeasures } from '../model/measure'
 import {
   DEFAULT_HEAD,
   DEFAULT_INK,
@@ -144,8 +146,14 @@ export type AppState = {
   setBallNumber: (id: string, number: number | 'cue') => void
   /** a zone lands at the bottom, a widget just under the captions */
   addItem: (item: Item, placement?: Placement) => void
-  /** wireframe ball: clamp and contact-snap, never push-apart */
-  dragGhostBallTo: (id: string, at: Vec) => void
+  /** a ruler, with the ghosts it made for its free ends, as one undo step */
+  addMeasure: (measure: MeasureItem, ghosts: GhostBallItem[]) => void
+  /**
+   * wireframe ball: clamp and contact-snap, never push-apart. One at the end
+   * of a ruler snaps to a pocket, a spot or a cushion within `reachMm`
+   * instead, and otherwise to a whole number of balls.
+   */
+  dragGhostBallTo: (id: string, at: Vec, reachMm?: number) => void
   setPower: (id: string, value: PowerValue) => void
   adjustPower: (id: string, steps: number) => void
   resetDot: (id: string) => void
@@ -374,10 +382,31 @@ export const useStore = create<AppState>()(
           s.selectedId = item.id
         }),
 
-      dragGhostBallTo: (id, at) => {
+      addMeasure: (measure, ghosts) =>
+        edit((s) => {
+          s.scene.items.unshift(measure)
+          // a ghost is drawn over the balls, like one put down by hand
+          s.scene.items.push(...ghosts)
+          s.selectedId = measure.id
+        }),
+
+      dragGhostBallTo: (id, at, reachMm = 40) => {
         const g = geom()
         const { scene, snap } = get()
         const ballMm = scene.table.ballMm
+        const ruler = scene.items.find((i): i is MeasureItem => i.type === 'measure' && (i.a === id || i.b === id))
+        if (ruler) {
+          // the end of a ruler: it marks a pocket, a spot or the cushion, or
+          // a whole number of balls - not a contact with some other ball
+          let p = clampToField(g, at, ballMm)
+          if (snap) {
+            const other = anchorAt(scene.items, ruler.a === id ? ruler.b : ruler.a)
+            const end = settleEnd(g, p, other, ballMm, reachMm)
+            p = end.kind !== 'free' ? end.at : clampToField(g, snapToMeasures(scene.items, id, p, ballMm), ballMm)
+          }
+          set((s) => patchItem(s, id, { x: p.x, y: p.y } as Partial<Item>))
+          return
+        }
         let p = clampToField(g, at, ballMm)
         p = snapTouch(scene.items, id, p, ballMm)
         if (snap) p = clampToField(g, snapPoint(g, p, true), ballMm)
@@ -491,11 +520,13 @@ export const useStore = create<AppState>()(
         // a copy of a ruler would lie exactly on the original: it is the two
         // balls that make it, and those have not been copied
         if (!item || item.type === 'measure') return
+        // nor does a copy of a ruler's ghost belong to that ruler
+        const own = item.type === 'ghostBall' && item.owner ? { owner: undefined } : {}
         // 90 mm clears a ball but not a 600 mm pair of magnified ones: a copy
         // landing on top of its original reads as a rendering fault
         const b = itemBounds(item, scene.table.ballMm)
         const off = Math.max(90, Math.round(Math.max(b.w, b.h) * 0.25))
-        const copy = { ...translateItem(item, off, off), id: newId(item.type) } as Item
+        const copy = { ...translateItem(item, off, off), ...own, id: newId(item.type) } as Item
         edit((s) => {
           s.scene.items.push(copy)
           s.selectedId = copy.id

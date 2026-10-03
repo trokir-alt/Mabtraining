@@ -180,6 +180,12 @@ export type GhostBallItem = ItemBase & {
   type: 'ghostBall'
   x: number
   y: number
+  /**
+   * The ruler that put it there, when a ruler was drawn to a pocket, a spot
+   * or a cushion rather than to a ball. It goes when that ruler goes, unless
+   * another ruler still hangs on it; one placed by hand has none and stays.
+   */
+  owner?: string
 }
 
 /**
@@ -199,6 +205,8 @@ export type MeasureItem = ItemBase & {
   color: string
   /** the count beside the row: "3,4 шара" */
   label: boolean
+  /** ghosts filled with the colour instead of drawn as rings */
+  fill?: boolean
 }
 
 /* ------------------------------------------------------------------ union */

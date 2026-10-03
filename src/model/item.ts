@@ -398,3 +398,99 @@ export function settleDot(p: Vec, radiusMm: number): { u: number; v: number } {
 export function formatPower(value: number): string {
   return value.toFixed(1).replace('.', ',')
 }
+
+/* ----------------------------------------------------- what is under a tap */
+
+/** distance from `p` to the segment a-b */
+function segDist(p: Vec, a: Vec, b: Vec): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len2 = dx * dx + dy * dy
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t))
+}
+
+/** distance from `p` to an arrow's path, straight or curved */
+function arrowDist(p: Vec, points: Vec[]): number {
+  const { a, c, b } = arrowCurve(points)
+  if (!c) return segDist(p, a, b)
+  let best = Infinity
+  let prev = a
+  for (let i = 1; i <= 24; i++) {
+    const t = i / 24
+    const u = 1 - t
+    const q = { x: u * u * a.x + 2 * u * t * c.x + t * t * b.x, y: u * u * a.y + 2 * u * t * c.y + t * t * b.y }
+    best = Math.min(best, segDist(p, prev, q))
+    prev = q
+  }
+  return best
+}
+
+/**
+ * Is `p` on this item? The same shapes the canvas draws, widened by `tolMm`
+ * for a line, which is what a fingertip needs: Konva's own hit test only
+ * runs for objects that listen, and while a drawing tool is on they do not.
+ */
+export function hitsItem(item: Item, p: Vec, ballMm: number, tolMm: number, items: Item[] = []): boolean {
+  const r = ballMm / 2
+  switch (item.type) {
+    case 'ball':
+    case 'ghostBall':
+      return Math.hypot(p.x - item.x, p.y - item.y) <= r + tolMm / 3
+    case 'arrow':
+      return arrowDist(p, item.points) <= item.width / 2 + tolMm
+    case 'line':
+      return segDist(p, item.from, item.to) <= item.width / 2 + tolMm
+    case 'ghostTrail':
+      return segDist(p, item.from, item.to) <= r + tolMm / 3
+    case 'zone': {
+      if (item.shape === 'rect') {
+        return p.x >= item.x && p.x <= item.x + item.w && p.y >= item.y && p.y <= item.y + item.h
+      }
+      const rx = Math.max(item.w / 2, 1)
+      const ry = Math.max(item.h / 2, 1)
+      const nx = (p.x - item.x - rx) / rx
+      const ny = (p.y - item.y - ry) / ry
+      return nx * nx + ny * ny <= 1
+    }
+    case 'text': {
+      // into the caption's own frame: it is drawn from (x, y), centred on y
+      const a = (-item.angle * Math.PI) / 180
+      const dx = p.x - item.x
+      const dy = p.y - item.y
+      const u = dx * Math.cos(a) - dy * Math.sin(a)
+      const v = dx * Math.sin(a) + dy * Math.cos(a)
+      const w = Math.max(1, item.text.length) * item.size * 0.62
+      return u >= -tolMm / 3 && u <= w + tolMm / 3 && Math.abs(v) <= item.size * 0.6 + tolMm / 3
+    }
+    case 'strikePoint': {
+      if (Math.hypot(p.x - item.x, p.y - item.y) <= item.sizeMm / 2) return true
+      if (!item.companion) return false
+      const c = companionCentre(item)
+      return Math.hypot(p.x - c.x, p.y - c.y) <= item.sizeMm / 2
+    }
+    case 'power': {
+      const b = itemBounds(item, ballMm)
+      return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h
+    }
+    case 'measure': {
+      const ends = measureEnds(item, items)
+      return !!ends && segDist(p, ends[0], ends[1]) <= r + tolMm / 3
+    }
+  }
+}
+
+/** The topmost item under `p` that `accept` allows, or null. */
+export function itemAt(
+  items: Item[],
+  p: Vec,
+  ballMm: number,
+  tolMm: number,
+  accept: (item: Item) => boolean = () => true,
+): Item | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (accept(it) && hitsItem(it, p, ballMm, tolMm, items)) return it
+  }
+  return null
+}

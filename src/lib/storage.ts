@@ -189,13 +189,14 @@ function parseItem(raw: unknown, table: TableConfig): Item | null {
     case 'ghostBall': {
       const p = vec(o)
       if (!p) return null
-      return { id, type: 'ghostBall', x: p.x, y: p.y }
+      const owner = str(o.owner)
+      return { id, type: 'ghostBall', x: p.x, y: p.y, ...(owner ? { owner } : {}) }
     }
     case 'measure': {
       const a = str(o.a)
       const b = str(o.b)
       if (!a || !b || a === b) return null
-      return { id, type: 'measure', a, b, color: str(o.color) ?? '#FFFFFF', label: o.label !== false }
+      return { id, type: 'measure', a, b, color: str(o.color) ?? '#FFFFFF', label: o.label !== false, ...(o.fill === true ? { fill: true } : {}) }
     }
     default:
       return null

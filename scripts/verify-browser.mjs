@@ -1771,10 +1771,19 @@ async function clothAndRuler(page, label, phone = null) {
   check(`${label}: the ruler tool is on the panel`, (await page.evaluate(() => window.__store.getState().tool)) === 'measure')
 
   const [A, B, C] = [await ball(ids[0]), await ball(ids[1]), await ball(ids[2])]
-  // a press on open cloth is not a ruler, nor is a release on open cloth
-  await draw({ x: 1500, y: 1300 }, B)
-  await draw(A, { x: 1500, y: 1300 })
-  check(`${label}: a ruler needs a ball at both ends`, (await measures()).length === 0, `${(await measures()).length} made`)
+  // open cloth to open cloth is not a ruler, nor is a press and release on
+  // the same ball; a ruler to a pocket, a spot or a cushion is checked later
+  await draw({ x: 1500, y: 1300 }, { x: 1900, y: 1350 })
+  await draw(A, { x: A.x + 20, y: A.y + 10 })
+  check(`${label}: a ruler needs a ball at one end at least`, (await measures()).length === 0, `${(await measures()).length} made`)
+  // that press and release on the ball was a tap on it: it is selected
+  const tapped = await page.evaluate(() => ({ tool: window.__store.getState().tool, sel: window.__store.getState().selectedId }))
+  check(`${label}: a tap on a ball with the ruler on selects the ball`, tapped.tool === 'select' && tapped.sel === A.id, JSON.stringify(tapped))
+  if (phone) {
+    const b = page.locator('.m-dock').getByRole('button', { name: 'Расстояние в шарах', exact: true })
+    await b.scrollIntoViewIfNeeded()
+    await b.click()
+  } else await tool(page, 'Расстояние в шарах')
 
   await draw(A, B)
   let ms = await measures()
@@ -1874,13 +1883,217 @@ async function clothAndRuler(page, label, phone = null) {
     st.setCloth('blue')
     st.newExercise()
     st.setTool('select')
+    // the groups after this one count history entries: start them from a
+    // fresh page's empty stack, not one these checks filled to the cap
+    window.__store.setState({ past: [], future: [] })
   })
   await page.waitForTimeout(150)
+}
+
+/**
+ * The ruler to a pocket, a spot and a cushion; filled ghosts; reaching an
+ * object with a drawing tool still on, and deleting it; the «?» help.
+ */
+async function endsDeleteHelp(page, label, phone = null) {
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.newExercise()
+    st.setCloth('blue')
+    st.setTool('select')
+  })
+  const pickTool = async (name) => {
+    if (phone) {
+      const b = page.locator('.m-dock').getByRole('button', { name, exact: true })
+      await b.scrollIntoViewIfNeeded()
+      await b.click()
+    } else await tool(page, name)
+    await page.waitForTimeout(100)
+  }
+  const draw = async (from, to) => {
+    const [[x0, y0], [x1, y1]] = await toPageAll(page, [[from.x, from.y], [to.x, to.y]])
+    if (phone) await phone.swipe([x0, y0], [x1, y1])
+    else {
+      await page.mouse.move(x0, y0)
+      await page.mouse.down()
+      await page.mouse.move(x1, y1, { steps: 14 })
+      await page.mouse.move(x1, y1)
+      await page.mouse.up()
+      await page.waitForTimeout(200)
+    }
+  }
+  /** a tap at a table point, nudged by some screen pixels */
+  const tapAt = async (mx, my, dx = 0, dy = 0) => {
+    const [[x, y]] = await toPageAll(page, [[mx, my]])
+    if (phone) await page.touchscreen.tap(x + dx, y + dy)
+    else await page.mouse.click(x + dx, y + dy)
+    await page.waitForTimeout(220)
+  }
+  const state = () => page.evaluate(() => {
+    const s = window.__store.getState()
+    return { tool: s.tool, sel: s.selectedId, items: JSON.parse(JSON.stringify(s.scene.items)), table: s.scene.table }
+  })
+  const near = (p, q, tol = 0.6) => !!p && Math.hypot(p.x - q.x, p.y - q.y) <= tol
+
+  // ---- a ruler to the cushion, to a pocket, from a spot
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.addBall('white', { x: 1200, y: 600 })
+    st.addBall('cue', { x: 2500, y: 1100 })
+    st.select(null)
+  })
+  let S = await state()
+  const D = S.table.ballMm
+  const L = S.table.lengthMm
+  const W = S.table.widthMm
+  const [A, B] = S.items.filter((i) => i.type === 'ball')
+  await pickTool('Расстояние в шарах')
+  await draw(A, { x: A.x + 60, y: 70 })
+  await draw(B, { x: L - 12, y: W - 12 })
+  await draw({ x: L / 8 + 20, y: W / 2 + 15 }, A)
+  S = await state()
+  const rulers = S.items.filter((i) => i.type === 'measure')
+  const ghostOf = (m, end) => S.items.find((i) => i.id === m[end] && i.type === 'ghostBall')
+  const toCushion = rulers.find((m) => m.a === A.id && ghostOf(m, 'b'))
+  const toPocket = rulers.find((m) => m.a === B.id && ghostOf(m, 'b'))
+  const fromSpot = rulers.find((m) => m.b === A.id && ghostOf(m, 'a'))
+  const gc = toCushion && ghostOf(toCushion, 'b')
+  const gp = toPocket && ghostOf(toPocket, 'b')
+  const gs = fromSpot && ghostOf(fromSpot, 'a')
+  check(`${label}: ball to cushion: a ghost touches the cushion straight across from the ball`, near(gc, { x: A.x, y: D / 2 }) && gc.owner === toCushion.id, gc ? `${gc.x.toFixed(1)},${gc.y.toFixed(1)}` : 'no ruler')
+  check(`${label}: ball to pocket: the ghost sits in the pocket`, near(gp, { x: L, y: W }) && gp.owner === toPocket.id, gp ? `${gp.x.toFixed(1)},${gp.y.toFixed(1)}` : 'no ruler')
+  check(`${label}: spot to ball: the ruler starts from a ghost on the house spot`, near(gs, { x: L / 8, y: W / 2 }) && gs.owner === fromSpot.id, gs ? `${gs.x.toFixed(1)},${gs.y.toFixed(1)}` : 'no ruler')
+  const labels = await page.evaluate(() => window.__stage.find('.measure-label').length)
+  check(`${label}: all three rulers are drawn and labelled`, rulers.length === 3 && labels === 3, `${rulers.length} rulers, ${labels} labels`)
+
+  // the end ghost keeps snapping: dragged near the corner pocket it drops in
+  if (gc) {
+    await page.evaluate(([id, reach]) => window.__store.getState().dragGhostBallTo(id, { x: 24, y: 28 }, reach), [gc.id, 120])
+    const moved = (await state()).items.find((i) => i.id === gc.id)
+    check(`${label}: the end ghost dragged near a pocket drops into it`, near(moved, { x: 0, y: 0 }), `${moved.x.toFixed(1)},${moved.y.toFixed(1)}`)
+  }
+
+  // ---- filled ghosts
+  if (toPocket) {
+    await pickTool('Выбор')
+    await page.evaluate((id) => window.__store.getState().select(id), toPocket.id)
+    await page.waitForTimeout(200)
+    const sampleFirst = () => page.evaluate(([id, r]) => {
+      const g = window.__stage.findOne('#' + id).find('.measure-ghost')[0]
+      return { x: g.x(), y: g.y() + r * 0.62 }
+    }, [toPocket.id, D / 2])
+    const at = await sampleFirst()
+    const luma = (pt) => measure(page, `return luma(at(${pt.x}, ${pt.y}))`)
+    const before = await luma(at)
+    await page.locator('.props').getByRole('button', { name: 'Закрашенные', exact: true }).click()
+    await page.waitForTimeout(200)
+    const after = await luma(at)
+    check(`${label}: «Закрашенные» fills the ghosts with the colour`, (await state()).items.find((i) => i.id === toPocket.id).fill === true && after > 200 && before < 175, `luma ${before.toFixed(0)} -> ${after.toFixed(0)}`)
+  }
+
+  // ---- deleting a ruler takes the ghost it made, and undo brings both back
+  if (fromSpot) {
+    await page.evaluate((id) => window.__store.getState().select(id), fromSpot.id)
+    await page.waitForTimeout(200)
+    await page.locator('.props').getByRole('button', { name: 'Удалить', exact: true }).click()
+    await page.waitForTimeout(200)
+    S = await state()
+    check(`${label}: deleting a ruler removes the ghost it put on the spot, not the ball`, !S.items.some((i) => i.id === fromSpot.id || i.id === gs.id) && S.items.some((i) => i.id === A.id))
+    await page.evaluate(() => window.__store.getState().undo())
+    await page.waitForTimeout(150)
+    S = await state()
+    check(`${label}: one undo brings the ruler and its ghost back`, S.items.some((i) => i.id === fromSpot.id) && S.items.some((i) => i.id === gs.id))
+  }
+
+  // ---- a drawing tool still on: a tap on an object reaches it
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.newExercise()
+    st.addItem({ id: 't-arrow', type: 'arrow', points: [{ x: 600, y: 1450 }, { x: 1700, y: 1450 }], style: 'solid', color: '#FFFFFF', width: 14, head: 'end', curved: false })
+    st.addItem({ id: 't-ell', type: 'zone', x: 2200, y: 300, w: 900, h: 500, shape: 'ellipse', color: '#F5A623', opacity: 0.25 }, 'bottom')
+    st.addBall('white', { x: 2650, y: 1300 })
+    st.select(null)
+  })
+  const off = (px) => (phone ? [px, 0] : [0, px]) // across the arrow, on screen
+  await pickTool('Стрелка')
+  await tapAt(1150, 1450, ...off(10))
+  S = await state()
+  check(`${label}: with «Стрелка» on, a tap 10 px off an arrow selects it and switches to «Выбор»`, S.tool === 'select' && S.sel === 't-arrow', `${S.tool}, ${S.sel}`)
+  const del = page.locator('.props').getByRole('button', { name: 'Удалить', exact: true })
+  check(`${label}: and the panel with «Удалить» is there`, (await del.count()) === 1)
+  if (await del.count()) {
+    if (phone) await del.tap()
+    else await del.click()
+    await page.waitForTimeout(200)
+  }
+  check(`${label}: «Удалить» deletes the arrow`, !(await state()).items.some((i) => i.id === 't-arrow'))
+  await pickTool('Эллипс')
+  await tapAt(2650, 550)
+  S = await state()
+  check(`${label}: with «Эллипс» on, a tap inside an ellipse selects it`, S.tool === 'select' && S.sel === 't-ell', `${S.tool}, ${S.sel}`)
+  if ((await del.count()) === 1) {
+    if (phone) await del.tap()
+    else await del.click()
+    await page.waitForTimeout(200)
+  }
+  check(`${label}: and «Удалить» deletes the ellipse`, !(await state()).items.some((i) => i.id === 't-ell'))
+  const ballNow = (await state()).items.find((i) => i.type === 'ball')
+  await pickTool(phone ? 'Белый шар' : 'Белый шар')
+  await tapAt(ballNow.x, ballNow.y)
+  S = await state()
+  check(`${label}: with the ball tool on, a tap on a ball selects it instead of adding another`, S.sel === ballNow.id && S.items.filter((i) => i.type === 'ball').length === 1 && S.tool === 'select', `${S.sel}, ${S.items.filter((i) => i.type === 'ball').length} balls`)
+  // in «Выбор» an arrow is caught by a band a finger can hit
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.addItem({ id: 't-arrow2', type: 'arrow', points: [{ x: 600, y: 1450 }, { x: 1700, y: 1450 }], style: 'solid', color: '#FFFFFF', width: 14, head: 'end', curved: false })
+    st.select(null)
+    st.setTool('select')
+  })
+  await page.waitForTimeout(200)
+  await tapAt(1150, 1450, ...off(phone ? 14 : 9))
+  check(`${label}: in «Выбор» a tap ${phone ? 14 : 9} px off an arrow still catches it`, (await state()).sel === 't-arrow2', String((await state()).sel))
+
+  // ---- help
+  await page.evaluate(() => window.__store.getState().select(null))
+  const scope = phone ? page.locator('.m-dock') : page.locator('.toolbar .tool-grid')
+  const dots = await scope.locator('.help-dot').count()
+  check(`${label}: every tool has its «?»`, dots === 13, `${dots}`)
+  const dot = scope.getByRole('button', { name: 'Подсказка: Стрелка' })
+  await dot.scrollIntoViewIfNeeded()
+  await dot.click()
+  await page.waitForTimeout(250)
+  const dlg = page.getByRole('dialog', { name: 'Стрелка' })
+  const shown = await dlg.count()
+  const text = shown ? await dlg.innerText() : ''
+  check(`${label}: «?» opens the help for that tool without switching to it`, shown === 1 && /протяните/i.test(text) && (await state()).tool === 'select', `${shown} dialog, tool ${(await state()).tool}`)
+  if (!phone && shown) {
+    const bb = await page.locator('.help-pop__card').boundingBox()
+    const vp = page.viewportSize()
+    const tb = await page.locator('.toolbar').boundingBox()
+    check(`${label}: the help card is on screen, past the tool panel`, !!bb && bb.x >= tb.x + tb.width && bb.y >= 0 && bb.y + bb.height <= vp.height + 0.5, bb ? `${bb.x.toFixed(0)},${bb.y.toFixed(0)} ${bb.width.toFixed(0)}x${bb.height.toFixed(0)}` : 'none')
+  }
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(150)
+  check(`${label}: Esc closes the help`, (await page.getByRole('dialog').count()) === 0)
+  if (phone) await page.getByRole('button', { name: 'Меню', exact: true }).click()
+  await page.getByRole('button', { name: 'Как пользоваться' }).click()
+  await page.waitForTimeout(250)
+  const general = page.getByRole('dialog', { name: 'Как пользоваться' })
+  check(`${label}: «Как пользоваться» opens the general help`, (await general.count()) === 1 && /Удалить/.test(await general.innerText()))
+  await general.getByRole('button', { name: 'Закрыть' }).last().click()
+  await page.waitForTimeout(150)
+  check(`${label}: ✕ closes it`, (await page.getByRole('dialog').count()) === 0)
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.newExercise()
+    st.setTool('select')
+    window.__store.setState({ past: [], future: [] })
+  })
 }
 
 async function run(viewport, dsf, label, full) {
   const { ctx, page, errors } = await newPage(viewport, dsf)
   await clothAndRuler(page, label)
+  await endsDeleteHelp(page, label)
   if (full) await behaviour(page, label)
   await picture(page, label)
   await stage6(page, label)
@@ -2145,6 +2358,7 @@ if (!ONLY || ONLY === 'phone') {
   await stage6(page, 'phone')
 
   await clothAndRuler(page, 'phone', { swipe })
+  await endsDeleteHelp(page, 'phone', { swipe })
 
   const ta = await page.evaluate(() => {
     const c = document.querySelector('canvas')

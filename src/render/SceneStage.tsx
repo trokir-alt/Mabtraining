@@ -12,18 +12,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Group, Layer, Stage } from 'react-konva'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import type { Item, Vec } from '../model/types'
+import type { GhostBallItem, Item, Vec } from '../model/types'
 import { buildGeometry, clampToField } from '../model/table'
-import { STRIKE_DEFAULT_MM, dragHandle, defaultPowerWidth, type Handle } from '../model/item'
+import { STRIKE_DEFAULT_MM, dragHandle, defaultPowerWidth, itemAt, type Handle } from '../model/item'
 import { gameOf, scaledPreset } from '../model/game'
 import { DEFAULT_ZONE_COLOR, ZONE_OPACITY, ghostCount } from '../model/style'
 import { newId, resolveOverlap, snapPoint } from '../lib/place'
-import { findMeasure, pickAnchor, snapWithMeasures } from '../model/measure'
+import { findMeasure, pickAnchor, settleEnd, snapWithMeasures } from '../model/measure'
 import { publishDebug } from '../lib/debug'
 import { DRAG_TOOLS, retuneGhost, useStore, type Tool } from '../state/store'
 import { useView } from '../state/view'
 import { ItemView } from './ItemView'
-import { MeasureShape } from './shapes'
+import { GhostBallShape, MeasureShape } from './shapes'
+import { lineHitPx } from './hit'
 import { Handles } from './Handles'
 import { TableView } from './TableView'
 import { Watermark } from './Watermark'
@@ -38,6 +39,12 @@ const MIN_GESTURE_MM = 40
 const LIFT_PX = 60
 /** a press this close to a ball, in screen px, starts or ends a ruler on it */
 const GRAB_PX = 22
+/** the free end of a ruler finds a pocket, a spot or a cushion this far off */
+const END_PX = 28
+
+/** what a tap with a placing tool lands ON rather than next to: a ball is
+    not put on a ball, nor a widget on a widget */
+const SOLID = new Set<Item['type']>(['ball', 'ghostBall', 'strikePoint', 'power', 'text'])
 
 type Pinch = { dist: number; mid: Vec; view: Viewport }
 type Pan = { from: Vec; view: Viewport }
@@ -49,8 +56,12 @@ function isTouch(evt: unknown): boolean {
   return 'touches' in o || o.pointerType === 'touch'
 }
 
-/** `a` is the ball a ruler is being drawn from */
-type Draft = { tool: Tool; from: Vec; to: Vec; a?: string }
+/**
+ * `a` is the ball a ruler is being drawn from, if it starts on one; `press`
+ * is where the finger went down, before any magnet moved it - a tap is
+ * looked up there.
+ */
+type Draft = { tool: Tool; from: Vec; to: Vec; a?: string; press: Vec }
 
 export type SceneStageProps = {
   stageRef: React.MutableRefObject<Konva.Stage | null>
@@ -176,6 +187,24 @@ export function SceneStage({ stageRef }: SceneStageProps) {
     [g],
   )
 
+  /**
+   * A tap on something already drawn, with a drawing tool still on: that is
+   * the coach reaching for it, not starting another one. It is selected and
+   * the tool goes back to «Выбор», so the panel - and «Удалить» in it - comes
+   * up. Without this the object could only be reached by changing tool
+   * first, which on a phone, with no Delete key, looked like it could not be
+   * deleted at all. Returns whether something was hit.
+   */
+  const tapSelects = useCallback((p: Vec, solidOnly: boolean): boolean => {
+    const st = useStore.getState()
+    const tol = solidOnly ? 0 : lineHitPx() / 2 / layoutRef.current.scale
+    const hit = itemAt(st.scene.items, p, st.scene.table.ballMm, tol, solidOnly ? (it) => SOLID.has(it.type) : undefined)
+    if (!hit) return false
+    st.setTool('select')
+    st.select(hit.id)
+    return true
+  }, [])
+
   /* the press: start a gesture, place a caption, or just clear the selection */
   const onPointerDown = useCallback(
     (e: KonvaEventObject<MouseEvent | TouchEvent>) => {
@@ -198,21 +227,21 @@ export function SceneStage({ stageRef }: SceneStageProps) {
         return
       }
       if (st.tool === 'measure') {
-        // a ruler hangs between two balls, so it can only start on one
+        // from a ball, or from a pocket, a spot or a cushion to a ball
         e.evt.preventDefault()
         const hit = pickAnchor(st.scene.items, p, st.scene.table.ballMm, GRAB_PX / layoutRef.current.scale)
-        if (!hit) return
         dragging.current = true
-        setDraft({ tool: 'measure', from: hit.at, to: p, a: hit.id })
+        setDraft(hit ? { tool: 'measure', from: hit.at, to: p, a: hit.id, press: p } : { tool: 'measure', from: p, to: p, press: p })
         return
       }
       if (DRAG_TOOLS.includes(st.tool)) {
         e.evt.preventDefault()
         const from = snapPt(p)
         dragging.current = true
-        setDraft({ tool: st.tool, from, to: from })
+        setDraft({ tool: st.tool, from, to: from, press: p })
         return
       }
+      if ((st.tool === 'strike' || st.tool === 'power' || st.tool === 'ghost-ball' || st.tool === 'text') && tapSelects(p, true)) return
       if (st.tool === 'strike' || st.tool === 'power' || st.tool === 'ghost-ball') {
         const id = newId(st.tool)
         const item: Item =
@@ -242,7 +271,7 @@ export function SceneStage({ stageRef }: SceneStageProps) {
         return
       }
     },
-    [pointerMm, snapPt, setEditing, stageRef],
+    [pointerMm, snapPt, setEditing, stageRef, tapSelects],
   )
 
   const onPointerMove = useCallback(() => {
@@ -371,19 +400,45 @@ export function SceneStage({ stageRef }: SceneStageProps) {
       setDraft((d) => {
         if (!d) return null
         const st = useStore.getState()
+        const tapped = Math.hypot((raw ?? d.to).x - d.press.x, (raw ?? d.to).y - d.press.y) < MIN_GESTURE_MM
         if (d.tool === 'measure') {
-          // released on another ball: that is the ruler; anywhere else, nothing
           const end = raw ?? d.to
-          const hit = d.a
-            ? pickAnchor(st.scene.items, end, st.scene.table.ballMm, GRAB_PX / layoutRef.current.scale, d.a)
-            : null
-          if (!d.a || !hit) return null
-          const same = findMeasure(st.scene.items, d.a, hit.id)
-          if (same) {
-            st.select(same.id)
+          const D = st.scene.table.ballMm
+          const scale = layoutRef.current.scale
+          const hit = pickAnchor(st.scene.items, end, D, GRAB_PX / scale, d.a)
+          const ink = st.draft.ink
+          if (d.a && hit) {
+            // ball to ball
+            const same = findMeasure(st.scene.items, d.a, hit.id)
+            if (same) st.select(same.id)
+            else st.addItem({ id: newId('measure'), type: 'measure', a: d.a, b: hit.id, color: ink, label: true }, 'bottom')
             return null
           }
-          st.addItem({ id: newId('measure'), type: 'measure', a: d.a, b: hit.id, color: st.draft.ink, label: true }, 'bottom')
+          if (d.a) {
+            // pressed on a ball and let go on it: that is a tap on the ball
+            if (Math.hypot(end.x - d.from.x, end.y - d.from.y) < D * 1.2) {
+              tapSelects(d.press, false)
+              return null
+            }
+            // from a ball to a pocket, a spot, the cushion or open cloth
+            const id = newId('measure')
+            const at = settleEnd(g, end, d.from, D, END_PX / scale).at
+            if (Math.hypot(at.x - d.from.x, at.y - d.from.y) < D * 0.99) return null
+            const ghost: GhostBallItem = { id: newId('ghost-ball'), type: 'ghostBall', x: at.x, y: at.y, owner: id }
+            st.addMeasure({ id, type: 'measure', a: d.a, b: ghost.id, color: ink, label: true }, [ghost])
+            return null
+          }
+          if (!hit) {
+            // neither end on a ball: nothing to measure, but a tap still selects
+            if (tapped) tapSelects(d.press, false)
+            return null
+          }
+          // from a pocket, a spot or the cushion to a ball
+          const id = newId('measure')
+          const at = settleEnd(g, d.from, hit.at, D, END_PX / scale).at
+          if (Math.hypot(at.x - hit.at.x, at.y - hit.at.y) < D * 0.99) return null
+          const ghost: GhostBallItem = { id: newId('ghost-ball'), type: 'ghostBall', x: at.x, y: at.y, owner: id }
+          st.addMeasure({ id, type: 'measure', a: ghost.id, b: hit.id, color: ink, label: true }, [ghost])
           return null
         }
         const to = raw ? snapPt(raw) : d.to
@@ -392,7 +447,10 @@ export function SceneStage({ stageRef }: SceneStageProps) {
         const big = isZone
           ? Math.abs(to.x - d.from.x) >= MIN_GESTURE_MM && Math.abs(to.y - d.from.y) >= MIN_GESTURE_MM
           : len >= MIN_GESTURE_MM
-        if (!big) return null
+        if (!big) {
+          if (tapped) tapSelects(d.press, false)
+          return null
+        }
         const ds = st.draft
         let item: Item
         switch (d.tool) {
@@ -449,7 +507,7 @@ export function SceneStage({ stageRef }: SceneStageProps) {
         return null
       })
     },
-    [snapPt],
+    [snapPt, g, tapSelects],
   )
 
   const onPointerUp = useCallback(() => finishGesture(pointerMm()), [finishGesture, pointerMm])
@@ -485,12 +543,13 @@ export function SceneStage({ stageRef }: SceneStageProps) {
       const st = useStore.getState()
       if (st.tool === 'ball-white' || st.tool === 'ball-cue') {
         const p = pointerMm()
-        if (p) st.addBall(st.tool === 'ball-cue' ? 'cue' : 'white', p)
+        // on a ball: the coach means that ball, not a second one beside it
+        if (p && !tapSelects(p, true)) st.addBall(st.tool === 'ball-cue' ? 'cue' : 'white', p)
         return
       }
       if (st.tool === 'select') st.select(null)
     },
-    [pointerMm],
+    [pointerMm, tapSelects],
   )
 
   /* ---------------------------------------------------------- item drags */
@@ -534,7 +593,7 @@ export function SceneStage({ stageRef }: SceneStageProps) {
       // Konva puts the node back under the pointer before every move, so the
       // lift is added afresh each frame and never accumulates
       if (node.name() === 'ghostBall') {
-        useStore.getState().dragGhostBallTo(node.id(), lifted(node))
+        useStore.getState().dragGhostBallTo(node.id(), lifted(node), END_PX / layoutRef.current.scale)
         const it = useStore.getState().scene.items.find((i) => i.id === node.id())
         if (it && it.type === 'ghostBall') node.position({ x: it.x, y: it.y })
         return
@@ -563,7 +622,7 @@ export function SceneStage({ stageRef }: SceneStageProps) {
         return
       }
       if (node.name() === 'ghostBall') {
-        st.dragGhostBallTo(node.id(), { x: node.x(), y: node.y() })
+        st.dragGhostBallTo(node.id(), { x: node.x(), y: node.y() }, END_PX / layoutRef.current.scale)
         const it = st.scene.items.find((i) => i.id === node.id())
         if (it && it.type === 'ghostBall') node.position({ x: it.x, y: it.y })
         return
@@ -755,13 +814,26 @@ export function SceneStage({ stageRef }: SceneStageProps) {
     }
   }, [draft, table])
 
-  /** a ruler being drawn: from its ball to the ball under the pointer, or
-      to the pointer itself while it is over open cloth */
+  /**
+   * A ruler being drawn, as it would land: to the ball under the pointer, or
+   * to the ghost that would be put where the finger is - in the pocket, on
+   * the spot, against the cushion. `ghosts` are those would-be ghosts.
+   */
   const measureDraft = useMemo(() => {
-    if (!draft || draft.tool !== 'measure' || !draft.a) return null
-    const hit = pickAnchor(items, draft.to, table.ballMm, GRAB_PX / layout.scale, draft.a)
-    return { a: draft.from, b: hit ? hit.at : draft.to }
-  }, [draft, items, table.ballMm, layout.scale])
+    if (!draft || draft.tool !== 'measure') return null
+    const D = table.ballMm
+    const reach = END_PX / layout.scale
+    const hit = pickAnchor(items, draft.to, D, GRAB_PX / layout.scale, draft.a)
+    if (draft.a) {
+      if (hit) return { a: draft.from, b: hit.at, ghosts: [] as Vec[] }
+      if (Math.hypot(draft.to.x - draft.from.x, draft.to.y - draft.from.y) < D * 1.2) return null
+      const end = settleEnd(g, draft.to, draft.from, D, reach).at
+      return { a: draft.from, b: end, ghosts: [end] }
+    }
+    const start = settleEnd(g, draft.from, hit ? hit.at : draft.to, D, reach).at
+    if (Math.hypot(draft.to.x - start.x, draft.to.y - start.y) < D * 1.2) return null
+    return { a: start, b: hit ? hit.at : draft.to, ghosts: [start] }
+  }, [draft, items, table.ballMm, layout.scale, g])
 
   const noop = useCallback(() => {}, [])
 
@@ -862,6 +934,9 @@ export function SceneStage({ stageRef }: SceneStageProps) {
                   toward={{ x: table.lengthMm / 2, y: table.widthMm / 2 }}
                   scale={layout.scale}
                 />
+                {measureDraft.ghosts.map((p, i) => (
+                  <GhostBallShape key={i} item={{ id: 'draft-ghost', type: 'ghostBall', x: p.x, y: p.y }} ballMm={table.ballMm} />
+                ))}
               </Group>
             )}
             {selecting && selected && selected.type !== 'ball' && selected.type !== 'ghostBall' && selected.type !== 'measure' && (
@@ -903,7 +978,7 @@ export function StageHint() {
   if (tool === 'measure')
     return (
       <p className="stage-wrap__hint">
-        <span>Нажмите на шар и протяните до другого шара: между ними встанут шары-призраки вплотную.</span>{' '}
+        <span>Протяните от шара до шара, лузы, точки или борта: между ними встанут шары-призраки вплотную.</span>{' '}
         <span className="stage-wrap__keys">С магнитом шар, который тянут, встаёт ровно на целое число шаров.</span>
       </p>
     )

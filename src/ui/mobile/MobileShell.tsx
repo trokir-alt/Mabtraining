@@ -22,6 +22,7 @@ import { DensityPicker } from '../DensityPicker'
 import { SyncBadge } from '../SyncBadge'
 import { useLibrary } from '../../state/library'
 import { Sheet } from './Sheet'
+import { HelpDot, HelpGeneralButton } from '../help'
 
 export type MobileShellProps = {
   stageRef: React.MutableRefObject<Konva.Stage | null>
@@ -97,17 +98,19 @@ export function MobileShell({ stageRef, onExport, onCopy, onOpenLibrary }: Mobil
 
       <nav className="m-dock" aria-label="Инструменты">
         {toolsFor(game).map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={tool === t.id ? 'm-dock__tool is-active' : 'm-dock__tool'}
-            aria-pressed={tool === t.id}
-            aria-label={t.label}
-            onClick={() => pick(t.id)}
-          >
-            {t.icon}
-            <span className="m-dock__label">{t.short}</span>
-          </button>
+          <div key={t.id} className="m-dock__cell">
+            <button
+              type="button"
+              className={tool === t.id ? 'm-dock__tool is-active' : 'm-dock__tool'}
+              aria-pressed={tool === t.id}
+              aria-label={t.label}
+              onClick={() => pick(t.id)}
+            >
+              {t.icon}
+              <span className="m-dock__label">{t.short}</span>
+            </button>
+            <HelpDot tool={t.id} label={t.label} />
+          </div>
         ))}
       </nav>
 
@@ -201,6 +204,7 @@ function MenuSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   }
   return (
     <Sheet title="Стол" open={open} onClose={onClose}>
+      <HelpGeneralButton className="btn btn--quiet" after={onClose} />
       <GamePicker id="game-mobile" />
       <div className="row row--wrap">
         <RackButtons after={onClose} />

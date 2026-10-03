@@ -12,6 +12,7 @@
  */
 
 import type { Item, MeasureItem, Vec } from './types'
+import { clampToField, type TableGeometry } from './table'
 
 /** a ball the ruler can hang from: a real ball or a wireframe one */
 type Anchor = Extract<Item, { type: 'ball' | 'ghostBall' }>
@@ -170,13 +171,83 @@ export function snapWithMeasures(items: Item[], id: string, raw: Vec, grid: Vec,
 }
 
 /**
- * Drop every ruler that has lost a ball. Called with the edit that removed
- * the ball, so one undo brings both back together.
+ * Drop every ruler that has lost a ball, and every ghost a ruler made for
+ * itself once no ruler holds it any more. Called with the edit that removed
+ * the ball or the ruler, so one undo brings them all back together.
  */
 export function pruneMeasures(items: Item[]): Item[] {
   const anchors = new Set(items.filter(isAnchor).map((i) => i.id))
-  const kept = items.filter((i) => i.type !== 'measure' || (anchors.has(i.a) && anchors.has(i.b)))
+  const rulers = items.filter((i): i is MeasureItem => i.type === 'measure' && anchors.has(i.a) && anchors.has(i.b))
+  const held = new Set(rulers.flatMap((m) => [m.a, m.b]))
+  const alive = new Set(rulers.map((m) => m.id))
+  const kept = items.filter((i) => {
+    if (i.type === 'measure') return alive.has(i.id)
+    // a ghost its ruler made goes with the ruler; one placed by hand stays
+    if (i.type === 'ghostBall' && i.owner) return alive.has(i.owner) || held.has(i.id)
+    return true
+  })
   return kept.length === items.length ? items : kept
+}
+
+/* ------------------------------------------------- a ruler to the table */
+
+export type EndKind = 'pocket' | 'spot' | 'cushion' | 'free'
+
+/**
+ * Where the free end of a ruler goes: a ruler can run from a ball to a pocket,
+ * to a spot or to the cushion as well as to another ball, and there a ghost
+ * ball is put to hang it on.
+ *
+ * `p` is where the finger let go and `from` the ball at the other end. Within
+ * `reachMm`, in this order:
+ *  - a pocket: the ghost sits in it, on the drop point;
+ *  - a spot (the three on the long line, and the house's): on the spot;
+ *  - a cushion: touching it - and straight across from `from` when the finger
+ *    is anywhere near that line, since "how far from the cushion" means the
+ *    shortest way;
+ * and anywhere else simply where it was let go, kept on the cloth.
+ */
+export function settleEnd(g: TableGeometry, p: Vec, from: Vec | null, d: number, reachMm: number): { at: Vec; kind: EndKind } {
+  const r = d / 2
+  let best: Vec | null = null
+  let bestD = reachMm + r
+  for (const pk of g.pockets) {
+    const dist = Math.hypot(p.x - pk.at.x, p.y - pk.at.y)
+    if (dist <= bestD) {
+      best = pk.at
+      bestD = dist
+    }
+  }
+  if (best) return { at: clampToField(g, best, d), kind: 'pocket' }
+
+  const spots = [...g.spots, { x: g.houseLineX / 2, y: g.widthMm / 2 }]
+  bestD = reachMm
+  for (const s of spots) {
+    const dist = Math.hypot(p.x - s.x, p.y - s.y)
+    if (dist <= bestD) {
+      best = s
+      bestD = dist
+    }
+  }
+  if (best) return { at: { x: best.x, y: best.y }, kind: 'spot' }
+
+  // the line a touching ball's centre runs along, one per cushion, and how
+  // far in from it the finger is (negative past it, into the rail)
+  const sides = [
+    { horiz: true, line: r, depth: p.y - r },
+    { horiz: true, line: g.widthMm - r, depth: g.widthMm - r - p.y },
+    { horiz: false, line: r, depth: p.x - r },
+    { horiz: false, line: g.lengthMm - r, depth: g.lengthMm - r - p.x },
+  ]
+  const side = sides.filter((s) => s.depth <= reachMm).sort((a, b) => a.depth - b.depth)[0]
+  if (side) {
+    const along = side.horiz ? p.x : p.y
+    const straight = from ? (side.horiz ? from.x : from.y) : along
+    const use = Math.abs(along - straight) <= Math.max(d * 1.5, reachMm) ? straight : along
+    const at = side.horiz ? { x: use, y: side.line } : { x: side.line, y: use }
+    return { at: clampToField(g, at, d), kind: 'cushion' }
+  }
+  return { at: clampToField(g, p, d), kind: 'free' }
 }
 
 /** an existing ruler between these two balls, either way round */
