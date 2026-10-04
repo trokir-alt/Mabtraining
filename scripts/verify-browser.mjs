@@ -2090,10 +2090,254 @@ async function endsDeleteHelp(page, label, phone = null) {
   })
 }
 
+/**
+ * A ghost of a ruler's row replaced by a real ball; no figures on the ghosts;
+ * selecting several objects, grouping them, moving, turning and deleting
+ * the group.
+ */
+async function ghostsAndGroups(page, label, phone = null) {
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.newExercise()
+    st.setTool('select')
+  })
+  const tapAt = async (mx, my) => {
+    const [[x, y]] = await toPageAll(page, [[mx, my]])
+    if (phone) await page.touchscreen.tap(x, y)
+    else await page.mouse.click(x, y)
+    await page.waitForTimeout(220)
+  }
+  const dragMm = async (from, to) => {
+    const [[x0, y0], [x1, y1]] = await toPageAll(page, [[from.x, from.y], [to.x, to.y]])
+    if (phone) await phone.swipe([x0, y0], [x1, y1])
+    else {
+      await page.mouse.move(x0, y0)
+      await page.mouse.down()
+      await page.mouse.move(x1, y1, { steps: 16 })
+      await page.mouse.move(x1, y1)
+      await page.mouse.up()
+      await page.waitForTimeout(220)
+    }
+  }
+  const state = () => page.evaluate(() => {
+    const s = window.__store.getState()
+    return { sel: s.selection, picked: s.pickedGhost, multi: s.multiMode, items: JSON.parse(JSON.stringify(s.scene.items)), table: s.scene.table }
+  })
+  const press = async (name) => {
+    const b = page.locator('.props').getByRole('button', { name, exact: true })
+    if (phone) await b.tap()
+    else await b.click()
+    await page.waitForTimeout(200)
+  }
+
+  // ---- the row: no figures; a tapped ghost becomes a real ball
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.addBall('cue', { x: 800, y: 887.5 })
+    st.addBall('white', { x: 800 + st.scene.table.ballMm * 6, y: 887.5 })
+    const [a, b] = window.__store.getState().scene.items.map((i) => i.id)
+    st.addItem({ id: 'g-row', type: 'measure', a, b, color: '#FFFFFF', label: true }, 'bottom')
+    st.select(null)
+  })
+  let S = await state()
+  const D = S.table.ballMm
+  const rowGhosts = () => page.evaluate(() => window.__stage.findOne('#g-row').find('.measure-ghost').length)
+  const figures = await page.evaluate(() => window.__stage.findOne('#g-row').find('.measure-ghost').reduce((n, g) => n + g.find('Text').length, 0))
+  check(`${label}: the ghosts of a ruler carry no figures`, figures === 0 && (await rowGhosts()) === 5, `${figures} figures, ${await rowGhosts()} ghosts`)
+  await tapAt(800 + D * 3, 887.5)
+  S = await state()
+  check(`${label}: a tap on a ghost of the row picks that ghost`, S.picked?.measure === 'g-row' && S.picked?.index === 2, JSON.stringify(S.picked))
+  await press('Биток')
+  S = await state()
+  const put = S.items.find((i) => i.type === 'ball' && Math.hypot(i.x - (800 + D * 3), i.y - 887.5) < 0.01)
+  check(`${label}: «Заменить призрак на: Биток» puts a cue ball exactly in the ghost's place`, !!put && put.kind === 'cue' && S.sel[0] === put.id, put ? `${put.x.toFixed(2)},${put.y.toFixed(2)} ${put.kind}` : 'none')
+  check(`${label}: the ghost under the new ball is no longer drawn`, (await rowGhosts()) === 4, `${await rowGhosts()} ghosts`)
+  await page.evaluate(() => window.__store.getState().undo())
+  await page.waitForTimeout(150)
+  check(`${label}: one undo takes the ball back and the ghost returns`, (await rowGhosts()) === 5 && !(await state()).items.some((i) => i.id === put?.id))
+  // a wireframe ball at the end of a ruler, made real: the ruler stays on it
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    const a = st.scene.items.find((i) => i.type === 'ball').id
+    st.addMeasure({ id: 'g-end', type: 'measure', a, b: 'g-gb', color: '#FFFFFF', label: true }, [{ id: 'g-gb', type: 'ghostBall', x: 800, y: 300, owner: 'g-end' }])
+    st.select('g-gb')
+  })
+  await page.waitForTimeout(150)
+  await press('Белый')
+  S = await state()
+  const made = S.items.find((i) => i.id === 'g-gb')
+  check(`${label}: «Заменить на: Белый» makes a wireframe ball a real one, and its ruler stays`, made?.type === 'ball' && made.kind === 'white' && S.items.some((i) => i.id === 'g-end'), made ? made.type : 'gone')
+
+  // ---- several objects: a frame selects what lies inside it
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.newExercise()
+    st.addBall('white', { x: 1500, y: 650 })
+    st.addBall('white', { x: 1700, y: 650 })
+    st.addItem({ id: 'g-ar', type: 'arrow', points: [{ x: 1450, y: 850 }, { x: 1800, y: 850 }], style: 'solid', color: '#FFFFFF', width: 14, head: 'end', curved: false })
+    st.addItem({ id: 'g-zn', type: 'zone', x: 1400, y: 550, w: 500, h: 400, shape: 'rect', color: '#F5A623', opacity: 0.25 }, 'bottom')
+    st.addBall('cue', { x: 2700, y: 1350 })
+    st.select(null)
+    st.setTool('select')
+  })
+  await page.waitForTimeout(150)
+  S = await state()
+  const inside = S.items.filter((i) => i.type !== 'ball' || i.x < 2000).map((i) => i.id)
+  const outside = S.items.find((i) => i.type === 'ball' && i.kind === 'cue')
+  await dragMm({ x: 1350, y: 500 }, { x: 1960, y: 1000 })
+  S = await state()
+  check(`${label}: a frame over the cloth selects the four objects inside it, not the one outside`, S.sel.length === 4 && inside.every((id) => S.sel.includes(id)) && !S.sel.includes(outside.id), `${S.sel.length} selected`)
+  const count = await page.locator('[data-testid=selection-count]').textContent().catch(() => '')
+  check(`${label}: the panel says what is selected`, count === 'Выбрано: 4 объекта', count)
+  await press('Сгруппировать')
+  S = await state()
+  const gid = S.items.find((i) => i.id === 'g-ar')?.group
+  check(`${label}: «Сгруппировать» puts the four in one group`, !!gid && inside.every((id) => S.items.find((i) => i.id === id).group === gid) && !outside.group)
+  await page.evaluate(() => window.__store.getState().select(null))
+  await tapAt(1500, 650)
+  S = await state()
+  check(`${label}: a tap on one member selects the whole group`, S.sel.length === 4, `${S.sel.length}`)
+
+  // ---- the group moves as one, and stops at the cushion
+  const before = S.items
+  await dragMm({ x: 1500, y: 650 }, { x: 1800, y: 850 })
+  S = await state()
+  const delta = (id) => {
+    const a = before.find((i) => i.id === id)
+    const b = S.items.find((i) => i.id === id)
+    const pa = a.type === 'arrow' ? a.points[0] : a
+    const pb = b.type === 'arrow' ? b.points[0] : b
+    return { x: pb.x - pa.x, y: pb.y - pa.y }
+  }
+  const ds = inside.map(delta)
+  const same = ds.every((d) => Math.abs(d.x - ds[0].x) < 0.5 && Math.abs(d.y - ds[0].y) < 0.5)
+  check(`${label}: dragging one member moves the whole group by the same step`, same && Math.hypot(ds[0].x - 300, ds[0].y - 200) < 30, ds.map((d) => `${d.x.toFixed(0)},${d.y.toFixed(0)}`).join(' '))
+  const ballNow = S.items.find((i) => i.type === 'ball' && i.group === gid)
+  await dragMm(ballNow, { x: ballNow.x, y: ballNow.y - 2000 })
+  S = await state()
+  const top = Math.min(...S.items.filter((i) => i.type === 'ball' && i.group === gid).map((i) => i.y))
+  check(`${label}: pushed at the cushion, the group stops with its balls on the cloth`, Math.abs(top - D / 2) < 0.6, `top ball at y ${top.toFixed(2)}`)
+  await page.evaluate(() => window.__store.getState().undo())
+  await page.waitForTimeout(150)
+
+  // ---- the lever turns it about its centre, by 15-degree steps
+  await page.evaluate(() => window.__store.getState().select('g-ar'))
+  await page.waitForTimeout(250)
+  S = await state()
+  const lev = await page.evaluate(() => {
+    const n = window.__stage.findOne('.rotate-lever')
+    return n ? { x: n.x(), y: n.y() } : null
+  })
+  const zoneB = S.items.find((i) => i.id === 'g-zn')
+  const boxC = await page.evaluate(() => {
+    const st = window.__store.getState()
+    const ids = st.selection
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const n of window.__stage.find('.selection-frame')) void n
+    for (const it of st.scene.items) {
+      if (!ids.includes(it.id)) continue
+      const pts = it.type === 'arrow' ? it.points : it.type === 'zone' ? [{ x: it.x, y: it.y }, { x: it.x + it.w, y: it.y + it.h }] : [{ x: it.x - st.scene.table.ballMm / 2, y: it.y - st.scene.table.ballMm / 2 }, { x: it.x + st.scene.table.ballMm / 2, y: it.y + st.scene.table.ballMm / 2 }]
+      for (const p of pts) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y) }
+    }
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+  })
+  check(`${label}: a selected group has a turning lever`, !!lev)
+  if (lev) {
+    const r = Math.hypot(lev.x - boxC.x, lev.y - boxC.y)
+    await dragMm(lev, { x: boxC.x + r, y: boxC.y })
+    S = await state()
+    const z = S.items.find((i) => i.id === 'g-zn')
+    const ar = S.items.find((i) => i.id === 'g-ar')
+    const zc = { x: z.x + z.w / 2, y: z.y + z.h / 2 }
+    const zc0 = { x: zoneB.x + zoneB.w / 2, y: zoneB.y + zoneB.h / 2 }
+    check(`${label}: dragging the lever a quarter round turns the group 90°: zone and arrow with it`, z.angle === 90 && Math.abs(ar.points[0].x - ar.points[1].x) < 1 && Math.hypot(zc.x - zc0.x, zc.y - zc0.y) < 60, `zone ${z.angle}°, arrow dx ${(ar.points[1].x - ar.points[0].x).toFixed(1)}`)
+    const field = S.items.filter((i) => i.type === 'ball').every((b) => b.x >= D / 2 - 0.01 && b.y >= D / 2 - 0.01 && b.x <= S.table.lengthMm - D / 2 + 0.01 && b.y <= S.table.widthMm - D / 2 + 0.01)
+    check(`${label}: the turned balls are on the cloth`, field)
+  }
+
+  // ---- delete, undo, duplicate, ungroup
+  await page.evaluate(() => window.__store.getState().select('g-ar'))
+  await page.waitForTimeout(200)
+  await press('Удалить')
+  S = await state()
+  check(`${label}: «Удалить» removes the whole group, nothing else`, S.items.length === 1 && S.items[0].id === outside.id, `${S.items.length} left`)
+  await page.evaluate(() => window.__store.getState().undo())
+  await page.waitForTimeout(150)
+  S = await state()
+  check(`${label}: one undo brings the group back, still a group`, inside.every((id) => S.items.find((i) => i.id === id)?.group === gid))
+  await page.evaluate(() => window.__store.getState().select('g-ar'))
+  await page.waitForTimeout(200)
+  await press('Дублировать')
+  S = await state()
+  const copies = S.items.filter((i) => i.group && i.group !== gid)
+  check(`${label}: «Дублировать» copies the group as a group of its own`, copies.length === 4 && new Set(copies.map((i) => i.group)).size === 1 && S.sel.length === 4)
+  await press('Разгруппировать')
+  S = await state()
+  check(`${label}: «Разгруппировать» takes the copy apart`, copies.every((c) => !S.items.find((i) => i.id === c.id).group))
+
+  // ---- picking several by hand: Shift+click, or «Выбрать несколько»
+  await page.evaluate((id) => {
+    const st = window.__store.getState()
+    st.newExercise()
+    // each next ball up and to the left of the one before, on the screen,
+    // whichever way the table stands: the panel hangs below the selection
+    // and would otherwise sit on the ball the coach reaches for next
+    st.addBall('white', { x: 1300, y: 1100 })
+    st.addBall('white', { x: 1000, y: 800 })
+    st.addBall('white', { x: 700, y: 500 })
+    st.select(null)
+    void id
+  })
+  await page.waitForTimeout(150)
+  await tapAt(1300, 1100)
+  if (!phone) {
+    await page.keyboard.down('Shift')
+    await tapAt(1000, 800)
+    await page.keyboard.up('Shift')
+    check(`${label}: Shift+click adds a ball to the selection`, (await state()).sel.length === 2, `${(await state()).sel.length}`)
+    await page.keyboard.down('Shift')
+    await tapAt(1000, 800)
+    await page.keyboard.up('Shift')
+    check(`${label}: Shift+click again takes it out`, (await state()).sel.length === 1, `${(await state()).sel.length}`)
+  }
+  await press('Выбрать несколько')
+  check(`${label}: «Выбрать несколько» turns the mode on`, (await state()).multi === true)
+  await tapAt(700, 500)
+  await tapAt(1000, 800)
+  check(`${label}: in that mode each tap adds an object`, (await state()).sel.length === 3, `${(await state()).sel.length}`)
+  await tapAt(1000, 800)
+  check(`${label}: and a tap on a selected one takes it out`, (await state()).sel.length === 2, `${(await state()).sel.length}`)
+
+  // ---- a group and a turned zone survive a reload
+  if (!phone) {
+    await page.evaluate(() => {
+      const st = window.__store.getState()
+      st.newExercise()
+      st.addItem({ id: 'p-zn', type: 'zone', x: 1400, y: 550, w: 500, h: 300, shape: 'ellipse', color: '#F5A623', opacity: 0.25, angle: 30 }, 'bottom')
+      st.addBall('white', { x: 1650, y: 700 })
+      st.selectMany(['p-zn', window.__store.getState().scene.items.find((i) => i.type === 'ball').id])
+      st.groupSelection()
+    })
+    await page.waitForTimeout(900)
+    await page.reload({ waitUntil: 'networkidle' })
+    await page.waitForTimeout(900)
+    S = await state()
+    const z = S.items.find((i) => i.id === 'p-zn')
+    check(`${label}: a group and a turned zone survive a reload`, z?.angle === 30 && !!z.group && S.items.every((i) => i.group === z.group), z ? `${z.angle}°, group ${z.group}` : 'gone')
+  }
+  await page.evaluate(() => {
+    const st = window.__store.getState()
+    st.newExercise()
+    st.setTool('select')
+    window.__store.setState({ past: [], future: [] })
+  })
+}
+
 async function run(viewport, dsf, label, full) {
   const { ctx, page, errors } = await newPage(viewport, dsf)
   await clothAndRuler(page, label)
   await endsDeleteHelp(page, label)
+  await ghostsAndGroups(page, label)
   if (full) await behaviour(page, label)
   await picture(page, label)
   await stage6(page, label)
@@ -2359,6 +2603,7 @@ if (!ONLY || ONLY === 'phone') {
 
   await clothAndRuler(page, 'phone', { swipe })
   await endsDeleteHelp(page, 'phone', { swipe })
+  await ghostsAndGroups(page, 'phone', { swipe })
 
   const ta = await page.evaluate(() => {
     const c = document.querySelector('canvas')

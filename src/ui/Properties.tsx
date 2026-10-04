@@ -15,6 +15,7 @@ import { gameOf, scaledPreset } from '../model/game'
 import { PoolBallPicker } from './GameControls'
 import { formatPower } from '../model/item'
 import { formatBalls, formatGap, measureEnds, measureLayout } from '../model/measure'
+import { unionBounds, wholeGroup } from '../model/group'
 import { useIsMobile } from './useMedia'
 
 export function Properties() {
@@ -23,6 +24,9 @@ export function Properties() {
   const ballMm = useStore((s) => s.scene.table.ballMm)
   const table = useStore((s) => s.scene.table)
   const items = useStore((s) => s.scene.items)
+  const selection = useStore((s) => s.selection)
+  const multiMode = useStore((s) => s.multiMode)
+  const picked = useStore((s) => s.pickedGhost)
   const tool = useStore((s) => s.tool)
   const view = useView()
   const mobile = useIsMobile()
@@ -39,11 +43,12 @@ export function Properties() {
   useLayoutEffect(() => {
     const w = ref.current?.offsetWidth
     if (w && Math.abs(w - panelW) > 1) setPanelW(w)
-  }, [item, tool, panelW])
+  }, [item, selection, tool, panelW])
 
   const pos = useMemo(() => {
-    if (!item || !view.layout) return null
-    const b = itemBounds(item, ballMm, items)
+    // several selected: under the box round all of them
+    const b = selection.length > 1 ? unionBounds(items, selection, ballMm) : item ? itemBounds(item, ballMm, items) : null
+    if (!b || !view.layout) return null
     // anchor under the object's bounding box, in css px inside .stage-wrap
     const corners = [
       mmToCss(view, { x: b.x, y: b.y }),
@@ -72,10 +77,73 @@ export function Properties() {
       top: Math.max(...ys) + 12,
       low: (Math.min(...ys) + Math.max(...ys)) / 2 > mid,
     }
-  }, [item, ballMm, items, view, panelW])
+  }, [item, selection, ballMm, items, view, panelW])
 
-  if (!item || !selectedId || tool !== 'select') return null
+  if (tool !== 'select') return null
   const st = useStore.getState()
+  const pool = gameOf(table) === 'pool'
+
+  /** «Выбрать несколько»: taps then put objects in the selection or take them out */
+  const multiToggle = (
+    <button type="button" className="btn" aria-pressed={multiMode} onClick={() => st.setMultiMode(!multiMode)} title="Shift+клик">
+      Выбрать несколько
+    </button>
+  )
+  const nudge = mobile && (
+    <div className="props__row props__row--nudge" aria-label="Сдвиг на 5 мм">
+      <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(-5, 0)} aria-label="Влево 5 мм">←</button>
+      <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(0, -5)} aria-label="Вверх 5 мм">↑</button>
+      <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(0, 5)} aria-label="Вниз 5 мм">↓</button>
+      <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(5, 0)} aria-label="Вправо 5 мм">→</button>
+      <span className="props__label">5 мм</span>
+    </div>
+  )
+
+  if (selection.length > 1) {
+    // a group, or several objects picked together: what can be done to all
+    const group = wholeGroup(items, selection)
+    const n = selection.length
+    const word = n % 10 === 1 && n % 100 !== 11 ? 'объект' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'объекта' : 'объектов'
+    return (
+      <div
+        ref={ref}
+        className={mobile && pos?.low ? 'props props--top' : 'props'}
+        role="toolbar"
+        aria-label="Свойства объекта"
+        style={pos ? { left: pos.left, top: pos.top } : undefined}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="props__row">
+          <span className="props__label" data-testid="selection-count">
+            {group ? 'Группа' : 'Выбрано'}: {n} {word}
+          </span>
+        </div>
+        <div className="props__row">
+          {group ? (
+            <button type="button" className="btn" onClick={() => st.ungroupSelection()} title="Ctrl+Shift+G">
+              Разгруппировать
+            </button>
+          ) : (
+            <button type="button" className="btn" onClick={() => st.groupSelection()} title="Ctrl+G">
+              Сгруппировать
+            </button>
+          )}
+          {multiToggle}
+        </div>
+        {nudge}
+        <div className="props__row">
+          <button type="button" className="btn" onClick={() => st.duplicateSelected()} title="Ctrl+D">
+            Дублировать
+          </button>
+          <button type="button" className="btn btn--danger" onClick={() => st.removeSelected()} title="Delete">
+            Удалить
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (!item || !selectedId) return null
   const t = item.type
 
   // a widget has no colour field: six ink swatches on it stamp a key the type
@@ -95,7 +163,7 @@ export function Properties() {
   const ruler = ends ? measureLayout(ends[0], ends[1], ballMm) : null
 
   const color = 'color' in item ? item.color : null
-  const pool = gameOf(table) === 'pool'
+  const pickedHere = hasMeasure && picked && picked.measure === item.id ? picked.index : null
   // every preset is shown and matched as it comes out on THIS table
   const on = (referenceMm: number) => scaledPreset(referenceMm, table)
 
@@ -340,6 +408,40 @@ export function Properties() {
       )}
 
       {hasMeasure && (
+        <div className="props__row" aria-label="Призрак">
+          {pickedHere === null ? (
+            <span className="props__label">Нажмите на призрак, чтобы заменить его шаром</span>
+          ) : (
+            <>
+              <span className="props__label">Заменить призрак на</span>
+              <span className="seg" role="group" aria-label="Заменить призрак на">
+                <button type="button" className="btn seg__btn" onClick={() => st.replaceGhost(item.id, pickedHere, 'white')}>
+                  {pool ? 'Номерной' : 'Белый'}
+                </button>
+                <button type="button" className="btn seg__btn" onClick={() => st.replaceGhost(item.id, pickedHere, 'cue')}>
+                  Биток
+                </button>
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
+      {t === 'ghostBall' && (
+        <div className="props__row">
+          <span className="props__label">Заменить на</span>
+          <span className="seg" role="group" aria-label="Заменить шар-призрак на">
+            <button type="button" className="btn seg__btn" onClick={() => st.ghostBallToBall(item.id, 'white')}>
+              {pool ? 'Номерной' : 'Белый'}
+            </button>
+            <button type="button" className="btn seg__btn" onClick={() => st.ghostBallToBall(item.id, 'cue')}>
+              Биток
+            </button>
+          </span>
+        </div>
+      )}
+
+      {hasMeasure && (
         <div className="props__row">
           <span className="seg" role="group" aria-label="Призраки">
             <button type="button" className="btn seg__btn" aria-pressed={!item.fill} onClick={() => st.updateItem(item.id, { fill: false })}>
@@ -367,15 +469,9 @@ export function Properties() {
         </div>
       )}
 
-      {mobile && !hasMeasure && (
-        <div className="props__row props__row--nudge" aria-label="Сдвиг на 5 мм">
-          <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(-5, 0)} aria-label="Влево 5 мм">←</button>
-          <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(0, -5)} aria-label="Вверх 5 мм">↑</button>
-          <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(0, 5)} aria-label="Вниз 5 мм">↓</button>
-          <button type="button" className="btn btn--icon" onClick={() => st.nudgeSelected(5, 0)} aria-label="Вправо 5 мм">→</button>
-          <span className="props__label">5 мм</span>
-        </div>
-      )}
+      {!hasMeasure && nudge}
+
+      <div className="props__row">{multiToggle}</div>
 
       <div className="props__row">
         <button type="button" className="btn btn--icon" onClick={() => st.bringToFront(item.id)} title="На передний план" aria-label="На передний план">

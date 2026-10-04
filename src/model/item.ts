@@ -5,7 +5,7 @@
  * to ItemView - nothing else in the app needs to know the new type exists.
  */
 
-import type { Item, StrikePointItem, Vec } from './types'
+import type { Item, StrikePointItem, Vec, ZoneItem } from './types'
 import { quadControl } from './style'
 import { GAME_ORDER, scaledPreset } from './game'
 import { measureEnds } from './measure'
@@ -13,6 +13,64 @@ import { measureEnds } from './measure'
 export type Rect = { x: number; y: number; w: number; h: number }
 
 const v = (p: Vec, dx: number, dy: number): Vec => ({ x: p.x + dx, y: p.y + dy })
+
+/** `p` turned by `deg` degrees about `c` (clockwise on screen: y points down) */
+export function rotateAbout(p: Vec, c: Vec, deg: number): Vec {
+  const a = (deg * Math.PI) / 180
+  const cos = Math.cos(a)
+  const sin = Math.sin(a)
+  const dx = p.x - c.x
+  const dy = p.y - c.y
+  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos }
+}
+
+/* ---------------------------------------------------------- turned zones */
+
+const zoneAngle = (z: ZoneItem): number => (Number.isFinite(z.angle) ? (z.angle as number) : 0)
+const zoneCentre = (z: ZoneItem): Vec => ({ x: z.x + z.w / 2, y: z.y + z.h / 2 })
+
+/** the four corners of a zone as drawn, turned with it: nw, ne, se, sw */
+export function zoneCorners(z: ZoneItem): Vec[] {
+  const c = zoneCentre(z)
+  const a = zoneAngle(z)
+  return [
+    { x: z.x, y: z.y },
+    { x: z.x + z.w, y: z.y },
+    { x: z.x + z.w, y: z.y + z.h },
+    { x: z.x, y: z.y + z.h },
+  ].map((p) => (a ? rotateAbout(p, c, a) : p))
+}
+
+/**
+ * Turn a whole object by `deg` about `c`, rigidly. Used when a group is
+ * turned. Two things deliberately do not lie down with it: the strike-point
+ * ball and the strength scale are pictures read upright, so only where they
+ * stand turns; and a ruler has no place of its own - it follows its balls.
+ */
+export function rotateItem(item: Item, c: Vec, deg: number): Item {
+  const R = (p: Vec) => rotateAbout(p, c, deg)
+  switch (item.type) {
+    case 'ball':
+    case 'ghostBall':
+    case 'strikePoint':
+    case 'power':
+      return { ...item, ...R(item) }
+    case 'text':
+      return { ...item, ...R(item), angle: Math.round((item.angle + deg) * 100) / 100 }
+    case 'arrow':
+      return { ...item, points: item.points.map(R) }
+    case 'line':
+    case 'ghostTrail':
+      return { ...item, from: R(item.from), to: R(item.to) }
+    case 'zone': {
+      const m = R(zoneCentre(item))
+      const angle = ((((zoneAngle(item) + deg) % 360) + 360) % 360)
+      return { ...item, x: m.x - item.w / 2, y: m.y - item.h / 2, angle: Math.round(angle * 100) / 100 }
+    }
+    case 'measure':
+      return item
+  }
+}
 
 /** Move an item bodily. Returns a new item; never mutates. */
 export function translateItem(item: Item, dx: number, dy: number): Item {
@@ -67,8 +125,11 @@ export function itemBounds(item: Item, ballMm: number, items: Item[] = []): Rect
     case 'text':
       // a rough box is enough: it only positions the panel
       return box([item.x], [item.y], item.size)
-    case 'zone':
-      return { x: item.x, y: item.y, w: item.w, h: item.h }
+    case 'zone': {
+      if (!zoneAngle(item)) return { x: item.x, y: item.y, w: item.w, h: item.h }
+      const cs = zoneCorners(item)
+      return box(cs.map((p) => p.x), cs.map((p) => p.y))
+    }
     case 'arrow':
       return box(item.points.map((p) => p.x), item.points.map((p) => p.y), item.width)
     case 'line':
@@ -283,13 +344,16 @@ export function itemHandles(item: Item): Handle[] {
         { id: 'a', at: item.from, kind: 'end' },
         { id: 'b', at: item.to, kind: 'end' },
       ]
-    case 'zone':
+    case 'zone': {
+      // on the corners as drawn, turned with the zone
+      const [nw, ne, se, sw] = zoneCorners(item)
       return [
-        { id: 'nw', at: { x: item.x, y: item.y }, kind: 'corner' },
-        { id: 'ne', at: { x: item.x + item.w, y: item.y }, kind: 'corner' },
-        { id: 'se', at: { x: item.x + item.w, y: item.y + item.h }, kind: 'corner' },
-        { id: 'sw', at: { x: item.x, y: item.y + item.h }, kind: 'corner' },
+        { id: 'nw', at: nw, kind: 'corner' },
+        { id: 'ne', at: ne, kind: 'corner' },
+        { id: 'se', at: se, kind: 'corner' },
+        { id: 'sw', at: sw, kind: 'corner' },
       ]
+    }
     case 'text':
       return [{ id: 'rotate', at: { x: item.x, y: item.y - item.size * 1.5 }, kind: 'rotate' }]
     case 'power': {
@@ -330,16 +394,20 @@ export function dragHandle(item: Item, handleId: string, to: Vec, table: { game?
     case 'ghostTrail':
       return handleId === 'a' ? ({ from: to } as Partial<Item>) : ({ to } as Partial<Item>)
     case 'zone': {
-      const x0 = handleId === 'nw' || handleId === 'sw' ? to.x : item.x
-      const y0 = handleId === 'nw' || handleId === 'ne' ? to.y : item.y
-      const x1 = handleId === 'ne' || handleId === 'se' ? to.x : item.x + item.w
-      const y1 = handleId === 'se' || handleId === 'sw' ? to.y : item.y + item.h
-      return {
-        x: Math.min(x0, x1),
-        y: Math.min(y0, y1),
-        w: Math.abs(x1 - x0),
-        h: Math.abs(y1 - y0),
-      } as Partial<Item>
+      // worked in the zone's own, unturned frame: the corner opposite the
+      // one dragged stays put, and the new box is turned back the same way
+      const a = zoneAngle(item)
+      const c = zoneCentre(item)
+      const t = a ? rotateAbout(to, c, -a) : to
+      const x0 = handleId === 'nw' || handleId === 'sw' ? t.x : item.x
+      const y0 = handleId === 'nw' || handleId === 'ne' ? t.y : item.y
+      const x1 = handleId === 'ne' || handleId === 'se' ? t.x : item.x + item.w
+      const y1 = handleId === 'se' || handleId === 'sw' ? t.y : item.y + item.h
+      const w = Math.abs(x1 - x0)
+      const h = Math.abs(y1 - y0)
+      const local = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+      const m = a ? rotateAbout(local, c, a) : local
+      return { x: m.x - w / 2, y: m.y - h / 2, w, h } as Partial<Item>
     }
     case 'text': {
       const angle = (Math.atan2(to.y - item.y, to.x - item.x) * 180) / Math.PI + 90
@@ -444,6 +512,8 @@ export function hitsItem(item: Item, p: Vec, ballMm: number, tolMm: number, item
     case 'ghostTrail':
       return segDist(p, item.from, item.to) <= r + tolMm / 3
     case 'zone': {
+      const a = zoneAngle(item)
+      if (a) p = rotateAbout(p, zoneCentre(item), -a)
       if (item.shape === 'rect') {
         return p.x >= item.x && p.x <= item.x + item.w && p.y >= item.y && p.y <= item.y + item.h
       }

@@ -32,7 +32,15 @@ export type TableConfig = {
   cloth: ClothColor
 }
 
-export type ItemBase = { id: string }
+export type ItemBase = {
+  id: string
+  /**
+   * The group the object belongs to, if any: objects sharing it are selected,
+   * moved, turned and deleted as one. One level only - a group of groups is
+   * just a bigger group.
+   */
+  group?: string
+}
 
 /* ---------------------------------------------------------------- stage 1 */
 
@@ -95,6 +103,11 @@ export type GhostTrailItem = ItemBase & {
   color: string
 }
 
+/**
+ * `x, y, w, h` are the zone's own box before it is turned; `angle` turns it
+ * about the box's centre, in degrees. Absent on every zone drawn before zones
+ * could turn, which is the same as 0.
+ */
 export type ZoneItem = ItemBase & {
   type: 'zone'
   x: number
@@ -104,6 +117,7 @@ export type ZoneItem = ItemBase & {
   shape: 'rect' | 'ellipse'
   color: string
   opacity: number
+  angle?: number
 }
 
 export type LineItem = ItemBase & {

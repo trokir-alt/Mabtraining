@@ -19,6 +19,7 @@ import { POWER_DEFAULT_MM, STRIKE_DEFAULT_MM, powerRange, strikeRange } from '..
 import { gameOf, scaledPreset } from '../model/game'
 import { isCloth } from '../model/theme'
 import { pruneMeasures } from '../model/measure'
+import { normalizeGroups } from '../model/group'
 import { DEFAULT_DENSITY, isDensity, type Density } from '../brand/watermark'
 import { DEFAULT_FULLNESS, clampFullness, normDeg } from '../model/item'
 
@@ -59,6 +60,14 @@ const poolNumber = (v: unknown): number | undefined =>
  * The ranges of the two widgets depend on the table, so it comes along.
  */
 function parseItem(raw: unknown, table: TableConfig): Item | null {
+  const item = parseOne(raw, table)
+  // a group is just a shared label; one that lost its other members is
+  // dropped afterwards, see normalizeGroups
+  const group = item ? str((raw as Record<string, unknown>).group) : undefined
+  return item && group ? { ...item, group } : item
+}
+
+function parseOne(raw: unknown, table: TableConfig): Item | null {
   if (!raw || typeof raw !== 'object') return null
   const o = raw as Record<string, unknown>
   const id = str(o.id)
@@ -114,6 +123,7 @@ function parseItem(raw: unknown, table: TableConfig): Item | null {
         shape: o.shape === 'ellipse' ? 'ellipse' : 'rect',
         color: str(o.color) ?? '#F5A623',
         opacity: Math.min(1, Math.max(0, num(o.opacity, 0.25))),
+        ...(num(o.angle, 0) !== 0 ? { angle: num(o.angle, 0) } : {}),
       }
     }
     case 'line': {
@@ -221,7 +231,7 @@ function parseScene(raw: unknown): Scene | null {
   }
   // a ruler whose ball did not survive the parse has nothing to measure
   const items = Array.isArray(o.items)
-    ? pruneMeasures(o.items.map((i) => parseItem(i, table)).filter((i): i is Item => i !== null))
+    ? normalizeGroups(pruneMeasures(o.items.map((i) => parseItem(i, table)).filter((i): i is Item => i !== null)))
     : []
   return {
     version: 1,

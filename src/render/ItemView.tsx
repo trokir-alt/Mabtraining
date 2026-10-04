@@ -25,6 +25,7 @@ import {
 import { useStore } from '../state/store'
 import { useView } from '../state/view'
 import { lineHitPx } from './hit'
+import { coveredGhosts } from '../model/measure'
 
 export type ItemViewProps = {
   item: Item
@@ -100,7 +101,11 @@ function MeasureView({ item, ballMm, selected }: { item: MeasureItem; ballMm: nu
   const widthMm = useStore((s) => s.scene.table.widthMm)
   const rotation = useView((s) => s.layout?.rotation ?? 0)
   const scale = useView((s) => s.layout?.scale ?? 0.3)
+  const picked = useStore((s) => (s.pickedGhost?.measure === item.id ? s.pickedGhost.index : null))
+  // a string, so the selector hands back something equal when nothing moved
+  const coveredKey = useStore((s) => coveredGhosts(item, s.scene.items, ballMm).join(','))
   if (![ax, ay, bx, by].every(Number.isFinite)) return null
+  const covered = coveredKey ? coveredKey.split(',').map(Number) : []
   return (
     <MeasureShape
       a={{ x: ax, y: ay }}
@@ -114,6 +119,8 @@ function MeasureView({ item, ballMm, selected }: { item: MeasureItem; ballMm: nu
       scale={scale}
       fill={item.fill === true}
       minHit={lineHitPx() / scale}
+      picked={picked}
+      covered={covered}
     />
   )
 }

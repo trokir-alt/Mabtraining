@@ -37,7 +37,8 @@ import {
 } from '../model/item'
 import { gameOf, isPool, scaledPreset } from '../model/game'
 import { convertScene, nextPoolNumber } from '../model/convert'
-import { anchorAt, pruneMeasures, settleEnd, snapToMeasures, snapWithMeasures } from '../model/measure'
+import { anchorAt, ghostCentre, pruneMeasures, settleEnd, snapToMeasures, snapWithMeasures } from '../model/measure'
+import { expandGroups, movedCopies, normalizeGroups, turnedCopies, unionBounds } from '../model/group'
 import {
   DEFAULT_HEAD,
   DEFAULT_INK,
@@ -105,7 +106,17 @@ export type DraftStyle = {
 
 export type AppState = {
   scene: Scene
+  /**
+   * Everything selected: one object, a whole group, or several picked
+   * together. `selectedId` is that one object when there is exactly one, and
+   * null otherwise - the properties of a single object are edited through it.
+   */
   selectedId: string | null
+  selection: string[]
+  /** a ghost of a ruler's row the coach tapped: what «Заменить на» acts on */
+  pickedGhost: { measure: string; index: number } | null
+  /** «Выбрать несколько»: a tap puts an object in the selection or takes it out */
+  multiMode: boolean
   tool: Tool
   draft: DraftStyle
   orientation: Orientation
@@ -138,7 +149,15 @@ export type AppState = {
   setTextSize: (mm: number) => void
 
   /* ---- selection ---- */
+  /** select one object - or, if it is in a group, the whole group */
   select: (id: string | null) => void
+  /** select these, with their groups; `add` keeps what was selected already */
+  selectMany: (ids: string[], add?: boolean) => void
+  /** in or out of the selection, with its group */
+  toggleSelect: (id: string) => void
+  setMultiMode: (on: boolean) => void
+  /** select a ruler with one ghost of its row picked */
+  pickGhost: (measureId: string, index: number) => void
 
   /* ---- editing ---- */
   addBall: (kind: BallKind, at?: Vec) => void
@@ -148,6 +167,20 @@ export type AppState = {
   addItem: (item: Item, placement?: Placement) => void
   /** a ruler, with the ghosts it made for its free ends, as one undo step */
   addMeasure: (measure: MeasureItem, ghosts: GhostBallItem[]) => void
+  /** a real ball exactly where a ghost of a ruler's row stood */
+  replaceGhost: (measureId: string, index: number, kind: 'white' | 'cue') => void
+  /** a wireframe ball made real, keeping its id so its rulers stay on it */
+  ghostBallToBall: (id: string, kind: 'white' | 'cue') => void
+  groupSelection: () => void
+  ungroupSelection: () => void
+  /** a frame of a drag of several objects, from where `snapshot` had them; no history */
+  moveSelectionLive: (snapshot: Item[], dx: number, dy: number) => void
+  /** the drop: the same, then balls pushed off any they landed on */
+  moveSelectionEnd: (snapshot: Item[], dx: number, dy: number) => void
+  /** a frame of a turn about `c`, from where `snapshot` had them; no history */
+  rotateSelectionLive: (snapshot: Item[], c: Vec, deg: number) => void
+  /** the end of the turn: balls kept on the cloth and off the others */
+  rotateSelectionEnd: (snapshot: Item[], c: Vec, deg: number) => void
   /**
    * wireframe ball: clamp and contact-snap, never push-apart. One at the end
    * of a ruler snaps to a pocket, a spot or a cushion within `reachMm`
@@ -244,9 +277,64 @@ export const useStore = create<AppState>()(
       s.scene.items[i] = { ...s.scene.items[i], ...patch } as Item
     }
 
+    /** the one place the selection is set: `selectedId` follows it */
+    const setSel = (s: AppState, ids: string[]) => {
+      s.selection = ids
+      s.selectedId = ids.length === 1 ? ids[0] : null
+      s.pickedGhost = null
+      if (ids.length === 0) s.multiMode = false
+    }
+
+    /** the same objects, replaced by these copies of them */
+    const putAll = (s: AppState, copies: Item[]) => {
+      const byId = new Map(copies.map((c) => [c.id, c]))
+      s.scene.items = s.scene.items.map((it) => byId.get(it.id) ?? it)
+    }
+
+    /** a move cut short where it would take any of the balls off the cloth */
+    const fitDelta = (snapshot: Item[], dx: number, dy: number) => {
+      const g = geom()
+      const D = get().scene.table.ballMm
+      let ox = dx
+      let oy = dy
+      for (let pass = 0; pass < 2; pass++) {
+        for (const it of snapshot) {
+          if (it.type !== 'ball' && it.type !== 'ghostBall') continue
+          const want = { x: it.x + ox, y: it.y + oy }
+          const c = clampToField(g, want, D)
+          ox += c.x - want.x
+          oy += c.y - want.y
+        }
+      }
+      return { dx: ox, dy: oy }
+    }
+
+    /**
+     * After a group lands: every ball on the cloth, and - with «Без
+     * наложения» - off the balls outside the group it came down on.
+     */
+    const settleSelectionBalls = (ids: string[]) => {
+      const g = geom()
+      const { noOverlap } = get()
+      set((s) => {
+        const D = s.scene.table.ballMm
+        for (const id of ids) {
+          const i = s.scene.items.findIndex((it) => it.id === id)
+          const it = s.scene.items[i]
+          if (!it || (it.type !== 'ball' && it.type !== 'ghostBall')) continue
+          let p = clampToField(g, { x: it.x, y: it.y }, D)
+          if (it.type === 'ball') p = resolveOverlap(g, s.scene.items, id, p, D, noOverlap)
+          s.scene.items[i] = { ...it, x: p.x, y: p.y }
+        }
+      })
+    }
+
     return {
       scene: initialScene(),
       selectedId: null,
+      selection: [],
+      pickedGhost: null,
+      multiMode: false,
       tool: 'select',
       draft: {
         ink: DEFAULT_INK,
@@ -266,7 +354,7 @@ export const useStore = create<AppState>()(
       setTool: (tool) =>
         set((s) => {
           s.tool = tool
-          if (tool !== 'select') s.selectedId = null
+          if (tool !== 'select') setSel(s, [])
         }),
       setOrientation: (o) =>
         set((s) => {
@@ -305,7 +393,7 @@ export const useStore = create<AppState>()(
         const next = convertScene(scene, game)
         edit((s) => {
           s.scene = next
-          s.selectedId = null
+          setSel(s, [])
         })
       },
 
@@ -340,7 +428,25 @@ export const useStore = create<AppState>()(
         if (id) get().updateItem(id, { size: scaledPreset(mm, get().scene.table) } as Partial<Item>)
       },
 
-      select: (id) => set((s) => void (s.selectedId = id)),
+      select: (id) => set((s) => setSel(s, id ? expandGroups(s.scene.items, [id]) : [])),
+      selectMany: (ids, add = false) =>
+        set((s) => setSel(s, expandGroups(s.scene.items, add ? [...s.selection, ...ids] : ids))),
+      toggleSelect: (id) =>
+        set((s) => {
+          const members = expandGroups(s.scene.items, [id])
+          const next = s.selection.includes(id)
+            ? s.selection.filter((x) => !members.includes(x))
+            : expandGroups(s.scene.items, [...s.selection, ...members])
+          const multi = s.multiMode
+          setSel(s, next)
+          if (next.length) s.multiMode = multi
+        }),
+      setMultiMode: (on) => set((s) => void (s.multiMode = on)),
+      pickGhost: (measureId, index) =>
+        set((s) => {
+          setSel(s, [measureId])
+          s.pickedGhost = { measure: measureId, index }
+        }),
 
       addBall: (kind, at) => {
         const g = geom()
@@ -354,7 +460,7 @@ export const useStore = create<AppState>()(
         if (kind !== 'cue' && isPool(scene.table)) ball.number = nextPoolNumber(scene.items)
         edit((s) => {
           s.scene.items.push(ball)
-          s.selectedId = ball.id
+          setSel(s, [ball.id])
         })
       },
 
@@ -379,7 +485,7 @@ export const useStore = create<AppState>()(
             if (i === -1) s.scene.items.push(item)
             else s.scene.items.splice(i, 0, item)
           } else s.scene.items.push(item)
-          s.selectedId = item.id
+          setSel(s, [item.id])
         }),
 
       addMeasure: (measure, ghosts) =>
@@ -387,7 +493,7 @@ export const useStore = create<AppState>()(
           s.scene.items.unshift(measure)
           // a ghost is drawn over the balls, like one put down by hand
           s.scene.items.push(...ghosts)
-          s.selectedId = measure.id
+          setSel(s, [measure.id])
         }),
 
       dragGhostBallTo: (id, at, reachMm = 40) => {
@@ -484,7 +590,14 @@ export const useStore = create<AppState>()(
       },
 
       nudgeSelected: (dx, dy) => {
-        const { selectedId, scene, noOverlap } = get()
+        const { selectedId, selection, scene, noOverlap } = get()
+        if (selection.length > 1) {
+          // several at once: all of them by the same step, as one undo
+          const snap = scene.items.filter((i) => selection.includes(i.id))
+          const d = fitDelta(snap, dx, dy)
+          edit((s) => putAll(s, movedCopies(snap, d.dx, d.dy)))
+          return
+        }
         if (!selectedId) return
         const item = scene.items.find((i) => i.id === selectedId)
         // a ruler goes where its balls go; nudging it alone would be a no-op
@@ -505,31 +618,117 @@ export const useStore = create<AppState>()(
       },
 
       removeSelected: () => {
-        const { selectedId } = get()
-        if (!selectedId) return
+        const { selection } = get()
+        if (!selection.length) return
+        const gone = new Set(selection)
         edit((s) => {
-          // a ruler hanging on the ball goes with it, in the same undo step
-          s.scene.items = pruneMeasures(s.scene.items.filter((i) => i.id !== selectedId))
-          s.selectedId = null
+          // a ruler hanging on a ball goes with it, in the same undo step,
+          // and a group left with one member is no group
+          s.scene.items = normalizeGroups(pruneMeasures(s.scene.items.filter((i) => !gone.has(i.id))))
+          setSel(s, [])
         })
       },
 
       duplicateSelected: () => {
-        const { selectedId, scene } = get()
-        const item = scene.items.find((i) => i.id === selectedId)
-        // a copy of a ruler would lie exactly on the original: it is the two
-        // balls that make it, and those have not been copied
-        if (!item || item.type === 'measure') return
-        // nor does a copy of a ruler's ghost belong to that ruler
-        const own = item.type === 'ghostBall' && item.owner ? { owner: undefined } : {}
+        const { selection, scene } = get()
+        const picked = scene.items.filter((i) => selection.includes(i.id))
+        const ids = new Set(picked.map((i) => i.id))
+        // a copy of a ruler would lie exactly on the original unless its two
+        // balls are copied with it
+        const take = picked.filter((i) => i.type !== 'measure' || (ids.has(i.a) && ids.has(i.b)))
+        if (!take.length) return
         // 90 mm clears a ball but not a 600 mm pair of magnified ones: a copy
         // landing on top of its original reads as a rendering fault
-        const b = itemBounds(item, scene.table.ballMm)
+        const b = unionBounds(scene.items, take.map((i) => i.id), scene.table.ballMm) ?? itemBounds(take[0], scene.table.ballMm)
         const off = Math.max(90, Math.round(Math.max(b.w, b.h) * 0.25))
-        const copy = { ...translateItem(item, off, off), ...own, id: newId(item.type) } as Item
+        const idOf = new Map(take.map((i) => [i.id, newId(i.type)]))
+        const groupOf = new Map<string, string>()
+        const copies = take.map((i) => {
+          let c = { ...translateItem(i, off, off), id: idOf.get(i.id) as string } as Item
+          // the copy of a group is a group of its own
+          if (i.group) {
+            if (!groupOf.has(i.group)) groupOf.set(i.group, newId('group'))
+            c = { ...c, group: groupOf.get(i.group) }
+          }
+          if (c.type === 'measure') c = { ...c, a: idOf.get(c.a) as string, b: idOf.get(c.b) as string }
+          // a ruler's ghost belongs to the copied ruler, or to none
+          if (c.type === 'ghostBall' && c.owner) c = { ...c, owner: idOf.get(c.owner) }
+          return c
+        })
         edit((s) => {
-          s.scene.items.push(copy)
-          s.selectedId = copy.id
+          // rulers lie under everything, the rest on top, as when drawn
+          s.scene.items.unshift(...copies.filter((c) => c.type === 'measure'))
+          s.scene.items.push(...copies.filter((c) => c.type !== 'measure'))
+          s.scene.items = normalizeGroups(s.scene.items)
+          setSel(s, copies.map((c) => c.id))
+        })
+      },
+
+      groupSelection: () => {
+        const { selection } = get()
+        if (selection.length < 2) return
+        const g = newId('group')
+        edit((s) => {
+          s.scene.items = s.scene.items.map((it) => (selection.includes(it.id) ? { ...it, group: g } : it))
+          s.selection = [...selection]
+        })
+      },
+
+      ungroupSelection: () => {
+        const { selection, scene } = get()
+        if (!scene.items.some((i) => selection.includes(i.id) && i.group)) return
+        edit((s) => {
+          s.scene.items = s.scene.items.map((it) => {
+            if (!selection.includes(it.id) || !it.group) return it
+            const { group: _g, ...rest } = it
+            void _g
+            return rest as Item
+          })
+          s.selection = [...selection]
+        })
+      },
+
+      moveSelectionLive: (snapshot, dx, dy) => {
+        const d = fitDelta(snapshot, dx, dy)
+        set((s) => putAll(s, movedCopies(snapshot, d.dx, d.dy)))
+      },
+
+      moveSelectionEnd: (snapshot, dx, dy) => {
+        get().moveSelectionLive(snapshot, dx, dy)
+        settleSelectionBalls(snapshot.map((i) => i.id))
+      },
+
+      rotateSelectionLive: (snapshot, c, deg) => set((s) => putAll(s, turnedCopies(snapshot, c, deg))),
+
+      rotateSelectionEnd: (snapshot, c, deg) => {
+        get().rotateSelectionLive(snapshot, c, deg)
+        settleSelectionBalls(snapshot.map((i) => i.id))
+      },
+
+      replaceGhost: (measureId, index, kind) => {
+        const { scene } = get()
+        const m = scene.items.find((i): i is MeasureItem => i.id === measureId && i.type === 'measure')
+        const at = m ? ghostCentre(m, scene.items, scene.table.ballMm, index) : null
+        if (!at) return
+        const ball: BallItem = { id: newId('ball'), type: 'ball', x: at.x, y: at.y, kind }
+        if (kind !== 'cue' && isPool(scene.table)) ball.number = nextPoolNumber(scene.items)
+        edit((s) => {
+          s.scene.items.push(ball)
+          setSel(s, [ball.id])
+        })
+      },
+
+      ghostBallToBall: (id, kind) => {
+        const { scene } = get()
+        const i = scene.items.findIndex((it) => it.id === id && it.type === 'ghostBall')
+        const ghost = scene.items[i]
+        if (!ghost || ghost.type !== 'ghostBall') return
+        // the same id: the rulers hanging on it stay on it, now a real ball
+        const ball: BallItem = { id, type: 'ball', x: ghost.x, y: ghost.y, kind, ...(ghost.group ? { group: ghost.group } : {}) }
+        if (kind !== 'cue' && isPool(scene.table)) ball.number = nextPoolNumber(scene.items)
+        edit((s) => {
+          s.scene.items[i] = ball
+          setSel(s, [id])
         })
       },
 
@@ -560,7 +759,7 @@ export const useStore = create<AppState>()(
         if (get().scene.items.length === 0) return
         edit((s) => {
           s.scene.items = []
-          s.selectedId = null
+          setSel(s, [])
         })
       },
 
@@ -569,7 +768,7 @@ export const useStore = create<AppState>()(
           s.scene.items = []
           s.scene.title = undefined
           s.scene.note = undefined
-          s.selectedId = null
+          setSel(s, [])
         }),
 
       rackPyramid: () => {
@@ -586,8 +785,8 @@ export const useStore = create<AppState>()(
         balls.push({ id: newId('ball'), type: 'ball', x: cue.x, y: cue.y, kind: 'cue' })
         edit((s) => {
           // keep everything that is not a ball: the drawing survives a re-rack
-          s.scene.items = pruneMeasures([...s.scene.items.filter((i) => i.type !== 'ball'), ...balls])
-          s.selectedId = null
+          s.scene.items = normalizeGroups(pruneMeasures([...s.scene.items.filter((i) => i.type !== 'ball'), ...balls]))
+          setSel(s, [])
         })
       },
 
@@ -606,15 +805,15 @@ export const useStore = create<AppState>()(
         const cue = housePoint(g)
         balls.push({ id: newId('ball'), type: 'ball', x: cue.x, y: cue.y, kind: 'cue' })
         edit((s) => {
-          s.scene.items = pruneMeasures([...s.scene.items.filter((i) => i.type !== 'ball'), ...balls])
-          s.selectedId = null
+          s.scene.items = normalizeGroups(pruneMeasures([...s.scene.items.filter((i) => i.type !== 'ball'), ...balls]))
+          setSel(s, [])
         })
       },
 
       replaceScene: (scene) =>
         edit((s) => {
           s.scene = scene
-          s.selectedId = null
+          setSel(s, [])
         }),
 
       setTitle: (title) =>
@@ -631,7 +830,7 @@ export const useStore = create<AppState>()(
           s.past = past.slice(0, -1)
           s.future = [...future, scene].slice(-HISTORY_LIMIT)
           s.scene = prev
-          s.selectedId = null
+          setSel(s, [])
         })
       },
 
@@ -643,7 +842,7 @@ export const useStore = create<AppState>()(
           s.future = future.slice(0, -1)
           s.past = [...past, scene].slice(-HISTORY_LIMIT)
           s.scene = next
-          s.selectedId = null
+          setSel(s, [])
         })
       },
     }

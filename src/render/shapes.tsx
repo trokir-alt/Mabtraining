@@ -184,18 +184,35 @@ export function ZoneShape({ item }: { item: ZoneItem }) {
     stroke: item.color,
     strokeWidth: 5,
   }
+  // turned about the box's centre; 0 for every zone from before zones turned
+  const rotation = Number.isFinite(item.angle) ? (item.angle as number) : 0
+  const cx = item.x + item.w / 2
+  const cy = item.y + item.h / 2
   if (item.shape === 'ellipse') {
     return (
       <Ellipse
-        x={item.x + item.w / 2}
-        y={item.y + item.h / 2}
+        x={cx}
+        y={cy}
         radiusX={Math.max(item.w / 2, 1)}
         radiusY={Math.max(item.h / 2, 1)}
+        rotation={rotation}
         {...common}
       />
     )
   }
-  return <Rect x={item.x} y={item.y} width={item.w} height={item.h} cornerRadius={12} {...common} />
+  return (
+    <Rect
+      x={cx}
+      y={cy}
+      offsetX={item.w / 2}
+      offsetY={item.h / 2}
+      width={item.w}
+      height={item.h}
+      rotation={rotation}
+      cornerRadius={12}
+      {...common}
+    />
+  )
 }
 
 /**
@@ -638,25 +655,21 @@ export type MeasureShapeProps = {
   fill?: boolean
   /** the narrowest band, in mm, the row can be picked up by; see render/hit */
   minHit?: number
-}
-
-/** dark figures on a light fill, white ones on a dark fill */
-function figureOn(color: string): string {
-  const m = /^#([0-9a-f]{6})$/i.exec(color)
-  if (!m) return '#FFFFFF'
-  const n = parseInt(m[1], 16)
-  const lum = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)
-  return lum > 140 ? '#1B2430' : '#FFFFFF'
+  /** the ghost the coach tapped, ringed: the one «Заменить на» acts on */
+  picked?: number | null
+  /** ghosts a real ball now stands on: not drawn, the ball has replaced them */
+  covered?: readonly number[]
 }
 
 /**
- * The row of ghosts between two balls, each touching the next, numbered so a
- * student can count them, and the count beside the row.
+ * The row of ghosts between two balls, each touching the next, and the count
+ * beside the row.
  *
  * The ghosts are the table's own ball - a ruler in some other unit would
- * quietly lie about how many real balls fit.
+ * quietly lie about how many real balls fit. Each is its own node named
+ * `ghost-<i>`, so a tap tells which one it was.
  */
-export function MeasureShape({ a, b, ballMm, color, label, selected, counter, toward, scale, fill = false, minHit = 0 }: MeasureShapeProps) {
+export function MeasureShape({ a, b, ballMm, color, label, selected, counter, toward, scale, fill = false, minHit = 0, picked = null, covered = [] }: MeasureShapeProps) {
   const L = measureLayout(a, b, ballMm)
   const r = ballMm / 2
   const px = 1 / Math.max(scale, 1e-3)
@@ -680,7 +693,6 @@ export function MeasureShape({ a, b, ballMm, color, label, selected, counter, to
   const off = r + ballMm * 0.25 + reach
   const at = { x: mid.x + n.x * off, y: mid.y + n.y * off }
   const textW = ballMm * 8
-  const numFs = ballMm * 0.5
   const last = L.ghosts[L.ghosts.length - 1]
   const rest = last ? { x: last.x + L.u.x * r, y: last.y + L.u.y * r } : L.start
   // a short bar across the row at each ball's surface: where the count starts and ends
@@ -699,8 +711,7 @@ export function MeasureShape({ a, b, ballMm, color, label, selected, counter, to
           listening={false}
         />
       )}
-      {/* the dashes are only the part no whole ball fills: through the ghosts
-          they would run across the numbers */}
+      {/* the dashes are only the part no whole ball fills: the ghosts show the rest */}
       {Math.hypot(L.end.x - rest.x, L.end.y - rest.y) > 1 && (
         <KLine
           points={[rest.x, rest.y, L.end.x, L.end.y]}
@@ -713,26 +724,17 @@ export function MeasureShape({ a, b, ballMm, color, label, selected, counter, to
       )}
       <KLine points={tick(L.start)} stroke={color} strokeWidth={sw} lineCap="round" opacity={0.9} listening={false} />
       <KLine points={tick(L.end)} stroke={color} strokeWidth={sw} lineCap="round" opacity={0.9} listening={false} />
-      {L.ghosts.map((g, i) => (
-        <Group key={i} x={g.x} y={g.y} name="measure-ghost">
-          <Circle radius={r - sw / 2} fill={color} opacity={fill ? 0.88 : 0.14} />
-          <Circle radius={r - sw / 2} stroke={color} strokeWidth={sw} opacity={0.9} listening={false} />
-          <Text
-            text={String(i + 1)}
-            fontSize={numFs}
-            fontFamily={CANVAS_FONT}
-            fontStyle="bold"
-            fill={fill ? figureOn(color) : color}
-            opacity={0.9}
-            width={ballMm}
-            align="center"
-            offsetX={ballMm / 2}
-            offsetY={numFs / 2}
-            rotation={counter}
-            listening={false}
-          />
-        </Group>
-      ))}
+      {L.ghosts.map((g, i) =>
+        covered.includes(i) ? null : (
+          <Group key={i} x={g.x} y={g.y} name={`measure-ghost ghost-${i}`}>
+            <Circle radius={r - sw / 2} fill={color} opacity={fill ? 0.88 : 0.14} />
+            <Circle radius={r - sw / 2} stroke={color} strokeWidth={sw} opacity={0.9} listening={false} />
+            {picked === i && (
+              <Circle radius={r + sw * 2.2} stroke="#FFD166" strokeWidth={sw * 1.6} dash={[ballMm * 0.22, ballMm * 0.14]} listening={false} />
+            )}
+          </Group>
+        ),
+      )}
       {label && (
         <Text
           name="measure-label"

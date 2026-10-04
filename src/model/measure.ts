@@ -257,3 +257,46 @@ export function findMeasure(items: Item[], a: string, b: string): MeasureItem | 
   }
   return null
 }
+
+/* --------------------------------------------- one ghost of the row, by index */
+
+/** where ghost `index` of the row stands, or null if the row has no such ghost */
+export function ghostCentre(item: MeasureItem, items: Item[], d: number, index: number): Vec | null {
+  const ends = measureEnds(item, items)
+  if (!ends) return null
+  return measureLayout(ends[0], ends[1], d).ghosts[index] ?? null
+}
+
+/** the ghost of the row under `p`, if any */
+export function ghostIndexAt(item: MeasureItem, items: Item[], d: number, p: Vec): number | null {
+  const ends = measureEnds(item, items)
+  if (!ends) return null
+  const { ghosts } = measureLayout(ends[0], ends[1], d)
+  let best: number | null = null
+  let bestD = d / 2
+  ghosts.forEach((g, i) => {
+    const dist = Math.hypot(p.x - g.x, p.y - g.y)
+    if (dist <= bestD) {
+      best = i
+      bestD = dist
+    }
+  })
+  return best
+}
+
+/**
+ * The ghosts a real ball now stands on: one put there with «Заменить на», or
+ * any ball the coach has placed exactly in the row. The row leaves them out,
+ * so the ball reads as having taken the ghost's place.
+ */
+export function coveredGhosts(item: MeasureItem, items: Item[], d: number): number[] {
+  const ends = measureEnds(item, items)
+  if (!ends) return []
+  const { ghosts } = measureLayout(ends[0], ends[1], d)
+  const balls = items.filter((i) => i.type === 'ball' && i.id !== item.a && i.id !== item.b)
+  const out: number[] = []
+  ghosts.forEach((g, i) => {
+    if (balls.some((b) => b.type === 'ball' && Math.hypot(b.x - g.x, b.y - g.y) < d * 0.1)) out.push(i)
+  })
+  return out
+}
